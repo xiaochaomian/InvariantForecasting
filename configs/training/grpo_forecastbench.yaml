@@ -1,0 +1,37 @@
+data:
+  paraphrase_path: data/paraphrased/forecastbench_current_after_2025-08-31_5x.jsonl
+  group_size: 5
+  train_frac: 0.8
+  val_frac: 0.1
+  seed: 17
+
+model:
+  name: Qwen/Qwen2.5-7B-Instruct
+  lora_r: 32
+  lora_alpha: 64
+  lora_dropout: 0.05
+  target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+
+training:
+  output_dir: outputs/grpo_forecastbench_qwen7b_lambda1
+  lambda_invariance: 1.0
+  parse_fail_reward: -1.0
+  learning_rate: 0.000005
+  beta: 0.04
+  per_device_train_batch_size: 5
+  gradient_accumulation_steps: 1
+  num_generations: 5
+  num_train_epochs: 1
+  max_prompt_length: 1024
+  max_completion_length: 96
+  logging_steps: 5
+  save_steps: 100
+  eval_strategy: steps
+  eval_steps: 50
+  shuffle_dataset: false
+  scale_rewards: batch
+  loss_type: dapo

@@ -1,0 +1,25 @@
+[project]
+name = "invariantforecasting"
+version = "0.1.0"
+description = "Frame-invariant RL post-training for LLM forecasting"
+requires-python = ">=3.10"
+dependencies = [
+  "accelerate",
+  "datasets",
+  "numpy",
+  "peft",
+  "pyyaml",
+  "torch",
+  "transformers",
+  "trl",
+]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
