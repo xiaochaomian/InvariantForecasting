@@ -9,12 +9,11 @@ from dataclasses import dataclass
 from typing import Any, Iterable
 
 
-_PROB_PATTERNS = [
-    re.compile(r"probability\s*[:=]\s*([01](?:\.\d+)?|\.\d+|\d{1,3}\s*%)", re.I),
-    re.compile(r"final\s*(?:answer|forecast)?\s*[:=]\s*([01](?:\.\d+)?|\.\d+|\d{1,3}\s*%)", re.I),
-    re.compile(r"(?<!\d)([01](?:\.\d+)?|\.\d+)(?!\d)"),
-    re.compile(r"\b(\d{1,3})\s*%"),
-]
+_EXPLICIT_PROBABILITY_PATTERN = re.compile(
+    r"(?:probability|final\s*(?:answer|forecast)?)\s*[:=]\s*"
+    r"([01](?:\.\d+)?|\.\d+|\d{1,3}\s*%)",
+    re.I,
+)
 
 
 @dataclass(frozen=True)
@@ -27,8 +26,12 @@ class RewardConfig:
 def parse_probability(text: Any) -> float | None:
     """Extract a probability in [0, 1] from model output text.
 
-    Supports decimals like ``0.37`` and percentages like ``37%``. Returns None
-    when no valid probability is found.
+    Supports explicit forecasts like ``Probability: 0.37`` and
+    ``Final answer: 37%``. Returns None when no valid probability is found.
+
+    We intentionally avoid parsing bare numbers from rationales, because model
+    outputs often contain list markers, dates, rankings, or prompt fragments
+    before the final forecast.
     """
 
     if text is None:
@@ -37,10 +40,8 @@ def parse_probability(text: Any) -> float | None:
     if not raw:
         return None
 
-    for pattern in _PROB_PATTERNS:
-        match = pattern.search(raw)
-        if not match:
-            continue
+    matches = list(_EXPLICIT_PROBABILITY_PATTERN.finditer(raw))
+    for match in reversed(matches):
         token = match.group(1).replace(" ", "")
         try:
             if token.endswith("%"):

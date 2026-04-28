@@ -11,7 +11,9 @@ class RewardTests(unittest.TestCase):
     def test_parse_probability_decimal_and_percent(self):
         self.assertEqual(parse_probability("Probability: 0.37"), 0.37)
         self.assertEqual(parse_probability("Final answer: 37%"), 0.37)
-        self.assertEqual(parse_probability("I think .8"), 0.8)
+        self.assertIsNone(parse_probability("I think .8"))
+        self.assertIsNone(parse_probability("1> Rationale: list marker without forecast"))
+        self.assertEqual(parse_probability("Probability: 0.2 then later Probability: 0.7"), 0.7)
         self.assertIsNone(parse_probability("no numeric forecast"))
 
     def test_grouped_frame_invariance_rewards_lambda_zero_is_brier(self):

@@ -45,6 +45,7 @@ def load_model_and_tokenizer(model_name: str, base_model: str | None):
     adapter_config = model_path / "adapter_config.json"
     tokenizer_name = base_model or model_name
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, trust_remote_code=True)
+    tokenizer.padding_side = "left"
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
@@ -101,9 +102,9 @@ def generate_outputs(
                 pad_token_id=tokenizer.pad_token_id,
                 eos_token_id=tokenizer.eos_token_id,
             )
-        prompt_lengths = encoded["attention_mask"].sum(dim=1).tolist()
-        for sequence, prompt_len in zip(generated, prompt_lengths):
-            completion_tokens = sequence[int(prompt_len) :]
+        input_length = encoded["input_ids"].shape[1]
+        for sequence in generated:
+            completion_tokens = sequence[input_length:]
             outputs.append(tokenizer.decode(completion_tokens, skip_special_tokens=True).strip())
     return outputs
 

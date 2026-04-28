@@ -8,6 +8,7 @@ penalty across semantically equivalent frames.
 from __future__ import annotations
 
 import argparse
+import inspect
 from pathlib import Path
 from typing import Any
 
@@ -122,6 +123,16 @@ def main() -> int:
             "Missing training dependencies. Install with `pip install -e .` in a GPU environment."
         ) from exc
 
+    group_size = int(data_cfg.get("group_size", 5))
+    train_batch_size = int(train_cfg.get("per_device_train_batch_size", group_size))
+    if train_batch_size % group_size != 0:
+        raise ValueError(
+            "per_device_train_batch_size must be a multiple of data.group_size so "
+            "paraphrase groups stay together inside reward batches"
+        )
+    if bool(train_cfg.get("shuffle_dataset", False)):
+        raise ValueError("shuffle_dataset must stay false for grouped paraphrase rewards")
+
     train_dataset = Dataset.from_list(splits["train"])
     eval_dataset = Dataset.from_list(splits["validation"])
     reward_func = make_trl_reward_func(
@@ -138,26 +149,33 @@ def main() -> int:
         target_modules=model_cfg.get("target_modules", ["q_proj", "k_proj", "v_proj", "o_proj"]),
     )
 
-    grpo_args = GRPOConfig(
-        output_dir=train_cfg.get("output_dir", "outputs/grpo_forecastbench"),
-        learning_rate=float(train_cfg.get("learning_rate", 5e-6)),
-        per_device_train_batch_size=int(train_cfg.get("per_device_train_batch_size", 5)),
-        gradient_accumulation_steps=int(train_cfg.get("gradient_accumulation_steps", 1)),
-        num_train_epochs=float(train_cfg.get("num_train_epochs", 1)),
-        num_generations=int(train_cfg.get("num_generations", 5)),
-        beta=float(train_cfg.get("beta", 0.04)),
-        max_prompt_length=int(train_cfg.get("max_prompt_length", 1024)),
-        max_completion_length=int(train_cfg.get("max_completion_length", 96)),
-        logging_steps=int(train_cfg.get("logging_steps", 5)),
-        save_steps=int(train_cfg.get("save_steps", 100)),
-        eval_strategy=train_cfg.get("eval_strategy", "steps"),
-        eval_steps=int(train_cfg.get("eval_steps", 50)),
-        dataloader_drop_last=True,
-        shuffle_dataset=bool(train_cfg.get("shuffle_dataset", False)),
-        scale_rewards=train_cfg.get("scale_rewards", "batch"),
-        loss_type=train_cfg.get("loss_type", "dapo"),
-        remove_unused_columns=False,
-    )
+    num_generations = int(train_cfg.get("num_generations", 5))
+    grpo_kwargs = {
+        "output_dir": train_cfg.get("output_dir", "outputs/grpo_forecastbench"),
+        "learning_rate": float(train_cfg.get("learning_rate", 5e-6)),
+        "per_device_train_batch_size": int(train_cfg.get("per_device_train_batch_size", 5)),
+        "per_device_eval_batch_size": int(train_cfg.get("per_device_eval_batch_size", num_generations)),
+        "gradient_accumulation_steps": int(train_cfg.get("gradient_accumulation_steps", 1)),
+        "num_train_epochs": float(train_cfg.get("num_train_epochs", 1)),
+        "num_generations": num_generations,
+        "beta": float(train_cfg.get("beta", 0.04)),
+        "max_prompt_length": int(train_cfg.get("max_prompt_length", 1024)),
+        "max_completion_length": int(train_cfg.get("max_completion_length", 96)),
+        "logging_steps": int(train_cfg.get("logging_steps", 5)),
+        "save_steps": int(train_cfg.get("save_steps", 100)),
+        "eval_strategy": train_cfg.get("eval_strategy", "steps"),
+        "eval_steps": int(train_cfg.get("eval_steps", 50)),
+        "dataloader_drop_last": True,
+        "shuffle_dataset": bool(train_cfg.get("shuffle_dataset", False)),
+        "scale_rewards": train_cfg.get("scale_rewards", "batch"),
+        "loss_type": train_cfg.get("loss_type", "dapo"),
+        "remove_unused_columns": False,
+    }
+    supported_args = set(inspect.signature(GRPOConfig).parameters)
+    dropped_args = sorted(set(grpo_kwargs) - supported_args)
+    if dropped_args:
+        print(f"Dropping unsupported GRPOConfig args for installed TRL: {dropped_args}")
+    grpo_args = GRPOConfig(**{k: v for k, v in grpo_kwargs.items() if k in supported_args})
 
     trainer = GRPOTrainer(
         model=model_cfg.get("name", "Qwen/Qwen2.5-7B-Instruct"),
