@@ -150,6 +150,14 @@ def main() -> int:
     )
 
     num_generations = int(train_cfg.get("num_generations", 5))
+    eval_strategy = train_cfg.get("eval_strategy", "steps")
+    if eval_strategy is False or eval_strategy is None:
+        eval_strategy = "no"
+    elif eval_strategy is True:
+        eval_strategy = "steps"
+    else:
+        eval_strategy = str(eval_strategy)
+
     grpo_kwargs = {
         "output_dir": train_cfg.get("output_dir", "outputs/grpo_forecastbench"),
         "learning_rate": float(train_cfg.get("learning_rate", 5e-6)),
@@ -163,7 +171,7 @@ def main() -> int:
         "max_completion_length": int(train_cfg.get("max_completion_length", 96)),
         "logging_steps": int(train_cfg.get("logging_steps", 5)),
         "save_steps": int(train_cfg.get("save_steps", 100)),
-        "eval_strategy": train_cfg.get("eval_strategy", "steps"),
+        "eval_strategy": eval_strategy,
         "eval_steps": int(train_cfg.get("eval_steps", 50)),
         "dataloader_drop_last": True,
         "shuffle_dataset": bool(train_cfg.get("shuffle_dataset", False)),

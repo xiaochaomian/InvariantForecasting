@@ -30,7 +30,7 @@ training:
   max_completion_length: 96
   logging_steps: 5
   save_steps: 100
-  eval_strategy: steps
+  eval_strategy: "no"
   eval_steps: 50
   shuffle_dataset: false
   scale_rewards: batch
