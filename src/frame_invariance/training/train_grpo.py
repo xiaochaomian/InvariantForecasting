@@ -133,18 +133,37 @@ def validate_training_layout(
     splits: dict[str, list[dict[str, Any]]],
     data_cfg: dict[str, Any],
     train_cfg: dict[str, Any],
-) -> tuple[int, int]:
+) -> tuple[int, int, int]:
     group_size = int(data_cfg.get("group_size", 5))
     train_batch_size = int(train_cfg.get("per_device_train_batch_size", group_size))
-    if train_batch_size % group_size != 0:
+    num_generations = int(train_cfg.get("num_generations", 5))
+    if train_batch_size % num_generations != 0:
         raise ValueError(
-            "per_device_train_batch_size must be a multiple of data.group_size so "
-            "paraphrase groups stay together inside reward batches"
+            "per_device_train_batch_size must be divisible by training.num_generations. "
+            "TRL GRPO treats per_device_train_batch_size as completion-level batch size."
+        )
+    generation_batch_size = train_cfg.get("generation_batch_size")
+    if generation_batch_size is None:
+        steps_per_generation = train_cfg.get(
+            "steps_per_generation",
+            train_cfg.get("gradient_accumulation_steps", 1),
+        )
+        generation_batch_size = train_batch_size * int(steps_per_generation)
+    generation_batch_size = int(generation_batch_size)
+    if generation_batch_size % num_generations != 0:
+        raise ValueError("generation_batch_size must be divisible by training.num_generations")
+    prompt_batch_size = generation_batch_size // num_generations
+    if prompt_batch_size % group_size != 0:
+        raise ValueError(
+            "TRL GRPO will sample "
+            f"{prompt_batch_size} unique prompts per generation batch, which is not a "
+            f"multiple of data.group_size={group_size}. Increase per_device_train_batch_size "
+            "or adjust num_generations so each reward batch contains complete paraphrase groups."
         )
     if bool(train_cfg.get("shuffle_dataset", False)):
         raise ValueError("shuffle_dataset must stay false for grouped paraphrase rewards")
-    validate_contiguous_group_batches(splits["train"], train_batch_size, group_size)
-    return group_size, train_batch_size
+    validate_contiguous_group_batches(splits["train"], prompt_batch_size, group_size)
+    return group_size, train_batch_size, prompt_batch_size
 
 
 def main() -> int:
@@ -169,7 +188,19 @@ def main() -> int:
         "split groups:",
         {name: len({row["id"] for row in rows}) for name, rows in splits.items()},
     )
-    group_size, train_batch_size = validate_training_layout(splits, data_cfg, train_cfg)
+    group_size, train_batch_size, prompt_batch_size = validate_training_layout(
+        splits,
+        data_cfg,
+        train_cfg,
+    )
+    print(
+        "GRPO batch layout:",
+        {
+            "completion_batch_size": train_batch_size,
+            "unique_prompts_per_generation_batch": prompt_batch_size,
+            "paraphrase_group_size": group_size,
+        },
+    )
 
     if args.dry_run:
         sample = splits["train"][:5]

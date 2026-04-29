@@ -22,12 +22,15 @@ training:
   parse_fail_reward: -1.0
   learning_rate: 0.000005
   beta: 0.04
-  per_device_train_batch_size: 5
+  # TRL GRPO batch size is completion-level. With num_generations=5, this
+  # yields 5 unique prompts per generation batch, i.e. one full paraphrase group.
+  per_device_train_batch_size: 25
   gradient_accumulation_steps: 1
   num_generations: 5
   num_train_epochs: 1
   max_prompt_length: 1024
-  max_completion_length: 96
+  # Forecast is required on the first generated line; keep training generations short.
+  max_completion_length: 48
   logging_steps: 5
   save_steps: 100
   eval_strategy: "no"
