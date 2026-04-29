@@ -2,6 +2,20 @@
 
 data-prepping so far
 
+## First run results
+
+Full documentation for the first end-to-end run is in [`firstrundocumentation.tex`](firstrundocumentation.tex).
+
+Held-out test split: 60 ForecastBench/current question groups, 5 paraphrases per group, 300 variant predictions total.
+
+| Run | Objective | Mean Brier (lower) | Mean ParaSD (lower) | Variant Coverage | Full-Group Coverage |
+|---|---|---:|---:|---:|---:|
+| Base Qwen2.5-7B | No RL, strict parser | **0.2436** | 0.1229 | 0.6667 | 0.2833 |
+| GRPO lambda=0 | Brier reward only | 0.2508 | 0.0894 | **1.0000** | **1.0000** |
+| GRPO lambda=1 | Brier + paraphrase variance penalty | 0.2495 | **0.0800** | **1.0000** | **1.0000** |
+
+Main first-run finding: `lambda=1` reduced paraphrase standard deviation by 34.9% vs. base and 10.5% vs. `lambda=0`, without an additional Brier cost relative to outcome-only GRPO. Base still has the best Brier, but with substantially lower parse coverage.
+
 ## ForecastBench/current data
 
 https://huggingface.co/datasets/forecastingresearch/forecastbench-datasets
@@ -80,16 +94,16 @@ After a model is available on a GPU node, evaluate the base model on the held-ou
 PYTHONPATH=src python -m frame_invariance.training.evaluate \
   --config configs/training/grpo_forecastbench.yaml \
   --model Qwen/Qwen2.5-7B-Instruct \
-  --run-name base_qwen7b \
+  --run-name base_qwen7b_strict \
   --split test \
   --batch-size 4
 ```
 
 This writes:
 
-- `results/base_qwen7b/test/summary.json`
-- `results/base_qwen7b/test/group_metrics.csv`
-- `results/base_qwen7b/test/variant_predictions.csv`
+- `results/base_qwen7b_strict/test/summary.json`
+- `results/base_qwen7b_strict/test/group_metrics.csv`
+- `results/base_qwen7b_strict/test/variant_predictions.csv`
 
 Then train/evaluate the outcome-only baseline by setting `lambda_invariance: 0.0` and a lambda0 output directory in the config, running GRPO, and evaluating the trained checkpoint:
 
