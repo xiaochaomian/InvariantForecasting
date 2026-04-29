@@ -52,6 +52,13 @@ This document records the first end-to-end experimental run for the
 post-training with an explicit frame-invariance penalty reduces paraphrase
 variance in LLM forecasts relative to both the base model and outcome-only GRPO.
 
+\textbf{Post-run caveat.} A later audit found that this run used prompts where
+many ForecastBench template dates were still literal placeholders such as
+\texttt{\{resolution\_date\}} and \texttt{\{forecast\_due\_date\}}, and the
+paraphrase artifact did not retain full background and resolution context. The
+results below should therefore be treated as a debugging baseline rather than a
+clean research result.
+
 The main empirical finding is that GRPO improves parseable forecast coverage and
 reduces paraphrase variance. The explicit invariance run ($\lambda=1$) gives the
 lowest paraphrase standard deviation while slightly improving Brier relative to

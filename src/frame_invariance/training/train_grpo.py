@@ -14,6 +14,7 @@ from typing import Any
 
 
 from .data import SplitConfig, load_grouped_prompt_splits
+from .prompts import apply_chat_template
 from .reward import make_trl_reward_func
 
 
@@ -21,6 +22,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run GRPO post-training for frame-invariant forecasting.")
     parser.add_argument("--config", default="configs/training/grpo_forecastbench.yaml")
     parser.add_argument("--dry-run", action="store_true", help="Validate data/config without importing GPU training libraries.")
+    parser.add_argument("--preflight", action="store_true", help="Validate GPU-run dependencies/config/tokenization without loading the model.")
+    parser.add_argument("--no-chat-template", action="store_true", help="Disable tokenizer chat-template formatting.")
     return parser.parse_args()
 
 
@@ -80,6 +83,70 @@ def load_config(path: str | Path) -> dict[str, Any]:
     return loaded
 
 
+def render_prompts_for_tokenizer(
+    rows: list[dict[str, Any]],
+    tokenizer: Any,
+    use_chat_template: bool,
+) -> list[dict[str, Any]]:
+    rendered_rows: list[dict[str, Any]] = []
+    for row in rows:
+        copied = dict(row)
+        if use_chat_template and row.get("messages"):
+            copied["prompt"] = apply_chat_template(row["messages"], tokenizer)
+        rendered_rows.append(copied)
+    return rendered_rows
+
+
+def validate_contiguous_group_batches(rows: list[dict[str, Any]], batch_size: int, group_size: int) -> None:
+    if len(rows) % batch_size != 0:
+        raise ValueError(
+            f"Training rows ({len(rows)}) are not divisible by per-device batch size ({batch_size}); "
+            "dataloader_drop_last would silently discard examples."
+        )
+    for start in range(0, len(rows), batch_size):
+        batch = rows[start : start + batch_size]
+        for group_start in range(0, len(batch), group_size):
+            group = batch[group_start : group_start + group_size]
+            ids = {row["id"] for row in group}
+            indexes = sorted(int(row["variant_index"]) for row in group)
+            if len(ids) != 1 or indexes != list(range(group_size)):
+                raise ValueError(
+                    "Training rows must keep complete paraphrase groups contiguous; "
+                    f"bad batch slice at rows {start + group_start}:{start + group_start + group_size}"
+                )
+
+
+def summarize_prompt_lengths(rows: list[dict[str, Any]], tokenizer: Any) -> dict[str, int]:
+    lengths = [len(tokenizer(row["prompt"], add_special_tokens=False)["input_ids"]) for row in rows]
+    lengths.sort()
+    if not lengths:
+        return {"min": 0, "p50": 0, "p95": 0, "max": 0}
+    return {
+        "min": lengths[0],
+        "p50": lengths[len(lengths) // 2],
+        "p95": lengths[int(0.95 * (len(lengths) - 1))],
+        "max": lengths[-1],
+    }
+
+
+def validate_training_layout(
+    splits: dict[str, list[dict[str, Any]]],
+    data_cfg: dict[str, Any],
+    train_cfg: dict[str, Any],
+) -> tuple[int, int]:
+    group_size = int(data_cfg.get("group_size", 5))
+    train_batch_size = int(train_cfg.get("per_device_train_batch_size", group_size))
+    if train_batch_size % group_size != 0:
+        raise ValueError(
+            "per_device_train_batch_size must be a multiple of data.group_size so "
+            "paraphrase groups stay together inside reward batches"
+        )
+    if bool(train_cfg.get("shuffle_dataset", False)):
+        raise ValueError("shuffle_dataset must stay false for grouped paraphrase rewards")
+    validate_contiguous_group_batches(splits["train"], train_batch_size, group_size)
+    return group_size, train_batch_size
+
+
 def main() -> int:
     args = parse_args()
     config = load_config(args.config)
@@ -102,6 +169,7 @@ def main() -> int:
         "split groups:",
         {name: len({row["id"] for row in rows}) for name, rows in splits.items()},
     )
+    group_size, train_batch_size = validate_training_layout(splits, data_cfg, train_cfg)
 
     if args.dry_run:
         sample = splits["train"][:5]
@@ -117,24 +185,13 @@ def main() -> int:
     try:
         from datasets import Dataset
         from peft import LoraConfig
+        from transformers import AutoTokenizer
         from trl import GRPOConfig, GRPOTrainer
     except ImportError as exc:
         raise SystemExit(
             "Missing training dependencies. Install with `pip install -e .` in a GPU environment."
         ) from exc
 
-    group_size = int(data_cfg.get("group_size", 5))
-    train_batch_size = int(train_cfg.get("per_device_train_batch_size", group_size))
-    if train_batch_size % group_size != 0:
-        raise ValueError(
-            "per_device_train_batch_size must be a multiple of data.group_size so "
-            "paraphrase groups stay together inside reward batches"
-        )
-    if bool(train_cfg.get("shuffle_dataset", False)):
-        raise ValueError("shuffle_dataset must stay false for grouped paraphrase rewards")
-
-    train_dataset = Dataset.from_list(splits["train"])
-    eval_dataset = Dataset.from_list(splits["validation"])
     reward_func = make_trl_reward_func(
         lambda_invariance=float(train_cfg.get("lambda_invariance", 1.0)),
         parse_fail_reward=float(train_cfg.get("parse_fail_reward", -1.0)),
@@ -180,19 +237,55 @@ def main() -> int:
         "remove_unused_columns": False,
     }
     supported_args = set(inspect.signature(GRPOConfig).parameters)
+    if "eval_strategy" not in supported_args and "evaluation_strategy" in supported_args:
+        grpo_kwargs["evaluation_strategy"] = grpo_kwargs.pop("eval_strategy")
     dropped_args = sorted(set(grpo_kwargs) - supported_args)
     if dropped_args:
-        print(f"Dropping unsupported GRPOConfig args for installed TRL: {dropped_args}")
+        raise ValueError(
+            "Installed TRL does not support required GRPOConfig arguments: "
+            f"{dropped_args}. Refusing to start an expensive run with silently changed settings."
+        )
     grpo_args = GRPOConfig(**{k: v for k, v in grpo_kwargs.items() if k in supported_args})
 
-    trainer = GRPOTrainer(
-        model=model_cfg.get("name", "Qwen/Qwen2.5-7B-Instruct"),
-        reward_funcs=reward_func,
-        args=grpo_args,
-        train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
-        peft_config=peft_cfg,
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_cfg.get("name", "Qwen/Qwen2.5-7B-Instruct"),
+        trust_remote_code=True,
     )
+    tokenizer.padding_side = "left"
+    tokenizer.truncation_side = "left"
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    train_dataset = Dataset.from_list(
+        render_prompts_for_tokenizer(splits["train"], tokenizer, not args.no_chat_template)
+    )
+    eval_dataset = Dataset.from_list(
+        render_prompts_for_tokenizer(splits["validation"], tokenizer, not args.no_chat_template)
+    )
+    length_summary = summarize_prompt_lengths(list(train_dataset), tokenizer)
+    print("train prompt token lengths:", length_summary)
+    max_prompt_length = int(train_cfg.get("max_prompt_length", 1024))
+    if length_summary["max"] > max_prompt_length:
+        print(
+            f"warning: some prompts exceed max_prompt_length={max_prompt_length} "
+            "and will be left-truncated."
+        )
+    if args.preflight:
+        print("preflight ok: dependencies, GRPO config, chat-template rendering, and batch grouping validated")
+        return 0
+
+    trainer_kwargs = {
+        "model": model_cfg.get("name", "Qwen/Qwen2.5-7B-Instruct"),
+        "reward_funcs": reward_func,
+        "args": grpo_args,
+        "train_dataset": train_dataset,
+        "eval_dataset": eval_dataset,
+        "peft_config": peft_cfg,
+    }
+    if "processing_class" in inspect.signature(GRPOTrainer).parameters:
+        trainer_kwargs["processing_class"] = tokenizer
+
+    trainer = GRPOTrainer(**trainer_kwargs)
     trainer.train()
     trainer.save_model()
     return 0

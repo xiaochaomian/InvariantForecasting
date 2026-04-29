@@ -22,6 +22,18 @@ class DataTests(unittest.TestCase):
         self.assertEqual(len(splits["validation"]), 300)
         self.assertEqual(len(splits["test"]), 300)
         self.assertTrue(all("Probability:" in row["prompt"] for row in splits["train"][:5]))
+        for rows in splits.values():
+            for row in rows:
+                self.assertNotIn("{resolution_date}", row["question"])
+                self.assertNotIn("{forecast_due_date}", row["question"])
+                self.assertNotIn("{resolution_date}", row["prompt"])
+                self.assertNotIn("{forecast_due_date}", row["prompt"])
+                self.assertIn("Forecast date:", row["prompt"])
+                self.assertIn("Resolution date:", row["prompt"])
+                self.assertTrue(row.get("background") or row.get("resolution_criteria"))
+                self.assertEqual(row["messages"][0]["role"], "system")
+                self.assertEqual(row["messages"][1]["role"], "user")
+                self.assertIn("Forecast date:", row["messages"][1]["content"])
 
 
 if __name__ == "__main__":

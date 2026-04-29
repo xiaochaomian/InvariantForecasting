@@ -6,6 +6,14 @@ data-prepping so far
 
 Full documentation for the first end-to-end run is in [`firstrundocumentation.tex`](firstrundocumentation.tex).
 
+Important caveat: these first-run numbers are pre-fix exploratory results. The
+run used prompts where many ForecastBench template dates were still literal
+placeholders such as `{resolution_date}` and `{forecast_due_date}`, and the
+paraphrase file did not carry full background/resolution context. Treat the table
+below as a debugging baseline, not as a clean research result. Regenerate
+paraphrases and rerun evaluation/training with the current code before reporting
+new results.
+
 Held-out test split: 60 ForecastBench/current question groups, 5 paraphrases per group, 300 variant predictions total.
 
 | Run | Objective | Mean Brier (lower) | Mean ParaSD (lower) | Variant Coverage | Full-Group Coverage |
@@ -75,8 +83,15 @@ Run the actual GRPO job in a GPU environment after installing dependencies:
 ```bash
 pip install -e .
 PYTHONPATH=src python3 -m frame_invariance.training.train_grpo \
+  --config configs/training/grpo_forecastbench.yaml \
+  --preflight
+PYTHONPATH=src python3 -m frame_invariance.training.train_grpo \
   --config configs/training/grpo_forecastbench.yaml
 ```
+
+Always run `--preflight` on the GPU machine before starting training. It checks
+dependency compatibility, chat-template rendering, tokenized prompt lengths, and
+paraphrase group/batch alignment without loading the model.
 
 Current split from the 5x paraphrase file:
 

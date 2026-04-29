@@ -4,12 +4,26 @@ from __future__ import annotations
 
 import json
 import random
+import re
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .prompts import build_prompt
+from .prompts import build_messages, build_prompt
+
+PLACEHOLDER_PATTERN = re.compile(r"\{(?:resolution_date|forecast_due_date)\}")
+CONTEXT_FIELDS = (
+    "background",
+    "resolution_criteria",
+    "url",
+    "forecastbench_question_set",
+    "forecastbench_resolution_snapshot",
+    "freeze_datetime",
+    "market_info_open_datetime",
+    "market_info_close_datetime",
+    "market_info_resolution_criteria",
+)
 
 
 @dataclass(frozen=True)
@@ -71,8 +85,21 @@ def split_group_ids(group_ids: list[str], config: SplitConfig) -> dict[str, set[
 
 
 def make_prompt_row(row: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "prompt": build_prompt(str(row["question"])),
+    question = str(row["question"])
+    if PLACEHOLDER_PATTERN.search(question):
+        raise ValueError(
+            f"Question {row.get('id')!r} still contains an unresolved date placeholder: {question!r}"
+        )
+    if not row.get("freeze_datetime"):
+        raise ValueError(f"Question {row.get('id')!r} is missing freeze_datetime/forecast date")
+    if not row.get("background") and not row.get("resolution_criteria"):
+        raise ValueError(f"Question {row.get('id')!r} is missing ForecastBench context")
+
+    prompt_source = dict(row)
+    prompt_source["question"] = question
+    output = {
+        "prompt": build_prompt(prompt_source),
+        "messages": build_messages(prompt_source),
         "question": row["question"],
         "id": str(row["id"]),
         "source_question_index": int(row["source_question_index"]),
@@ -84,6 +111,9 @@ def make_prompt_row(row: dict[str, Any]) -> dict[str, Any]:
         "resolved_at": row.get("resolved_at"),
         "paraphrase_method": row.get("paraphrase_method"),
     }
+    for field in CONTEXT_FIELDS:
+        output[field] = row.get(field)
+    return output
 
 
 def load_grouped_prompt_splits(

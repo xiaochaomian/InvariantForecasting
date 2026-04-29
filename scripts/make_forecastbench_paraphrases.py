@@ -23,6 +23,17 @@ DEFAULT_CSV_OUTPUT = "data/processed/forecastbench_current_after_2025-08-31_5x_p
 
 RESOLUTION_DATE = "{resolution_date}"
 FORECAST_DUE_DATE = "{forecast_due_date}"
+CONTEXT_FIELDS = [
+    "background",
+    "resolution_criteria",
+    "url",
+    "forecastbench_question_set",
+    "forecastbench_resolution_snapshot",
+    "freeze_datetime",
+    "market_info_open_datetime",
+    "market_info_close_datetime",
+    "market_info_resolution_criteria",
+]
 
 
 def parse_args() -> argparse.Namespace:
@@ -35,6 +46,38 @@ def parse_args() -> argparse.Namespace:
 
 def clean(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
+
+
+def date_part(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text or text.upper() == "N/A":
+        return None
+    return text[:10]
+
+
+def render_question_dates(question: str, row: dict[str, Any]) -> str:
+    rendered = question
+    resolution_date = date_part(row.get("resolved_at"))
+    forecast_due_date = date_part(row.get("freeze_datetime"))
+    if RESOLUTION_DATE in rendered:
+        if resolution_date is None:
+            raise ValueError(f"Missing resolved_at for placeholder question {row.get('id')!r}")
+        rendered = rendered.replace(RESOLUTION_DATE, resolution_date)
+    if FORECAST_DUE_DATE in rendered:
+        if forecast_due_date is None:
+            raise ValueError(f"Missing freeze_datetime for placeholder question {row.get('id')!r}")
+        rendered = rendered.replace(FORECAST_DUE_DATE, forecast_due_date)
+    if "{" in rendered and "}" in rendered:
+        raise ValueError(f"Unresolved placeholder in question for {row.get('id')!r}: {rendered!r}")
+    return rendered
+
+
+def normalize_record_value(value: Any) -> Any:
+    if isinstance(value, str):
+        return clean(value)
+    return value
 
 
 def strip_question_mark(text: str) -> str:
@@ -699,19 +742,23 @@ def build_records(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             raise ValueError(f"Duplicate variants for {row['id']}: {group!r}")
 
         for variant_index, text in enumerate(group):
+            rendered_question = clean(render_question_dates(text, row))
+            record = {
+                "source_question_index": group_index,
+                "id": row["id"],
+                "variant_index": variant_index,
+                "variant_id": f"{row['id']}::{variant_index}",
+                "is_original": variant_index == 0,
+                "question": rendered_question,
+                "source": row.get("source"),
+                "outcome": row.get("outcome"),
+                "resolved_at": row.get("resolved_at"),
+                "paraphrase_method": "original" if variant_index == 0 else method,
+            }
+            for field in CONTEXT_FIELDS:
+                record[field] = normalize_record_value(row.get(field))
             records.append(
-                {
-                    "source_question_index": group_index,
-                    "id": row["id"],
-                    "variant_index": variant_index,
-                    "variant_id": f"{row['id']}::{variant_index}",
-                    "is_original": variant_index == 0,
-                    "question": text,
-                    "source": row.get("source"),
-                    "outcome": row.get("outcome"),
-                    "resolved_at": row.get("resolved_at"),
-                    "paraphrase_method": "original" if variant_index == 0 else method,
-                }
+                record
             )
     return records
 
@@ -736,9 +783,10 @@ def write_csv(path: Path, records: list[dict[str, Any]]) -> None:
         "outcome",
         "resolved_at",
         "paraphrase_method",
+        *CONTEXT_FIELDS,
     ]
     with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer = csv.DictWriter(handle, fieldnames=fieldnames, lineterminator="\n")
         writer.writeheader()
         writer.writerows(records)
 

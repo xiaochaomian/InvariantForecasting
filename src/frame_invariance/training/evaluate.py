@@ -12,6 +12,7 @@ from statistics import mean, pstdev
 from typing import Any
 
 from .data import SplitConfig, load_grouped_prompt_splits
+from .prompts import apply_chat_template
 from .reward import parse_probability
 from .train_grpo import load_config
 
@@ -25,8 +26,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", default="results")
     parser.add_argument("--run-name", default=None)
     parser.add_argument("--batch-size", type=int, default=4)
+    parser.add_argument("--max-prompt-length", type=int, default=0, help="Tokenizer prompt cap; 0 uses config/default.")
     parser.add_argument("--max-new-tokens", type=int, default=96)
     parser.add_argument("--temperature", type=float, default=0.0)
+    parser.add_argument("--no-chat-template", action="store_true", help="Disable tokenizer chat-template formatting.")
     parser.add_argument("--limit-groups", type=int, default=0, help="Debug cap on number of question groups.")
     parser.add_argument("--dry-run", action="store_true", help="Use deterministic mock probabilities, no model load.")
     return parser.parse_args()
@@ -46,6 +49,7 @@ def load_model_and_tokenizer(model_name: str, base_model: str | None):
     tokenizer_name = base_model or model_name
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, trust_remote_code=True)
     tokenizer.padding_side = "left"
+    tokenizer.truncation_side = "left"
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
@@ -81,8 +85,10 @@ def generate_outputs(
     model_name: str,
     base_model: str | None,
     batch_size: int,
+    max_prompt_length: int,
     max_new_tokens: int,
     temperature: float,
+    use_chat_template: bool,
 ) -> list[str]:
     import torch
 
@@ -91,8 +97,20 @@ def generate_outputs(
     do_sample = temperature > 0.0
 
     for batch in batched(rows, batch_size):
-        prompts = [row["prompt"] for row in batch]
-        encoded = tokenizer(prompts, return_tensors="pt", padding=True, truncation=True).to(model.device)
+        prompts = [
+            apply_chat_template(row["messages"], tokenizer)
+            if use_chat_template and row.get("messages")
+            else row["prompt"]
+            for row in batch
+        ]
+        encode_kwargs: dict[str, Any] = {
+            "return_tensors": "pt",
+            "padding": True,
+            "truncation": True,
+        }
+        if max_prompt_length > 0:
+            encode_kwargs["max_length"] = max_prompt_length
+        encoded = tokenizer(prompts, **encode_kwargs).to(model.device)
         with torch.no_grad():
             generated = model.generate(
                 **encoded,
@@ -226,8 +244,10 @@ def main() -> int:
         args.model,
         args.base_model,
         args.batch_size,
+        args.max_prompt_length or int(config.get("training", {}).get("max_prompt_length", 0)),
         args.max_new_tokens,
         args.temperature,
+        not args.no_chat_template,
     )
     predictions = write_variant_predictions(output_dir / "variant_predictions.csv", rows, completions)
     summary = summarize(predictions)
