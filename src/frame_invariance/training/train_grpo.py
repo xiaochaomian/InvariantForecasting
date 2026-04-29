@@ -239,6 +239,16 @@ def main() -> int:
     supported_args = set(inspect.signature(GRPOConfig).parameters)
     if "eval_strategy" not in supported_args and "evaluation_strategy" in supported_args:
         grpo_kwargs["evaluation_strategy"] = grpo_kwargs.pop("eval_strategy")
+    optional_args = {"max_prompt_length"}
+    dropped_optional_args = sorted((set(grpo_kwargs) - supported_args) & optional_args)
+    for key in dropped_optional_args:
+        grpo_kwargs.pop(key)
+    if dropped_optional_args:
+        print(
+            "warning: installed TRL does not support optional GRPOConfig arguments "
+            f"{dropped_optional_args}; continuing after prompt-length preflight checks."
+        )
+
     dropped_args = sorted(set(grpo_kwargs) - supported_args)
     if dropped_args:
         raise ValueError(
