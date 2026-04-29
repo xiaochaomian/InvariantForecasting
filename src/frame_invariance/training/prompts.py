@@ -30,8 +30,10 @@ Resolution criteria:
 Market timing:
 {market_timing}
 
-Return a short rationale, then put your final answer on its own line exactly as:
+Put your forecast on the first line exactly as:
 Probability: <number between 0 and 1>
+
+Then add a short rationale on the following lines.
 """
 
 
