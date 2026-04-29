@@ -1,0 +1,8 @@
+{
+  "group_full_coverage": 1,
+  "mean_brier": 0.24945420733333332,
+  "mean_parasd": 0.08001697620003198,
+  "n_groups": 60,
+  "n_variant_predictions": 300,
+  "variant_coverage": 1.0
+}
