@@ -91,6 +91,51 @@ PYTHONPATH=src python -m frame_invariance.training.evaluate \
 
 This writes `results/base_qwen7b_clean/test/{summary.json,group_metrics.csv,variant_predictions.csv}`.
 
+## Mantic-Style Safe GRPO
+
+The recommended GRPO configs for new experiments are:
+
+- `configs/training/grpo_forecastbench_mantic_lambda0.yaml`
+- `configs/training/grpo_forecastbench_mantic_lambda1.yaml`
+
+These keep the same Brier / frame-invariance reward but use safer optimization:
+
+- `scale_rewards: none`, matching the "do not divide by reward standard deviation" lesson from Mantic-style GRPO
+- `learning_rate: 2e-7`, `beta: 0.3`, `max_grad_norm: 0.05`
+- short checkpoint cadence: `save_steps: 5`, `max_steps: 30`
+- `parse_fail_reward: -2.0`
+- live safety guards that abort training before saving a collapsed state if parse rate drops, gradient norm becomes non-finite, reward variance degenerates, or repeated punctuation loops appear
+
+Run lambda=1 first:
+
+```bash
+PYTHONPATH=src python -m frame_invariance.training.train_grpo \
+  --config configs/training/grpo_forecastbench_mantic_lambda1.yaml \
+  --preflight
+
+PYTHONPATH=src python -m frame_invariance.training.train_grpo \
+  --config configs/training/grpo_forecastbench_mantic_lambda1.yaml \
+  2>&1 | tee logs/grpo_mantic_lambda1_$(date +%Y%m%d_%H%M%S).log
+```
+
+Evaluate all saved checkpoints and choose by validation FRIE before test reporting:
+
+```bash
+for STEP in 5 10 15 20 25 30; do
+  PYTHONPATH=src python -m frame_invariance.training.evaluate \
+    --config configs/training/grpo_forecastbench_mantic_lambda1.yaml \
+    --model outputs/grpo_forecastbench_qwen7b_mantic_lambda1/checkpoint-$STEP \
+    --base-model Qwen/Qwen2.5-7B-Instruct \
+    --run-name grpo_mantic_lambda1_ckpt$STEP \
+    --split validation \
+    --batch-size 4 \
+    2>&1 | tee logs/eval_grpo_mantic_lambda1_ckpt${STEP}_validation_$(date +%Y%m%d_%H%M%S).log
+done
+```
+
+If training stops with `GRPO safety stop`, do not use the stopped state. Use the
+most recent earlier checkpoint and inspect the log around the stop.
+
 ## GRPO Lambda 0
 
 ```bash

@@ -3,6 +3,8 @@ import unittest
 from frame_invariance.training.reward import (
     RewardConfig,
     grouped_frame_invariance_rewards,
+    grouped_reward_metrics,
+    looks_degenerate_completion,
     parse_probability,
 )
 
@@ -56,6 +58,21 @@ class RewardTests(unittest.TestCase):
             RewardConfig(lambda_invariance=1.0, parse_fail_reward=-3.0),
         )
         self.assertEqual(rewards[1], -3.0)
+
+    def test_detects_punctuation_loop_collapse(self):
+        self.assertTrue(looks_degenerate_completion("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"))
+        self.assertTrue(looks_degenerate_completion("................................"))
+        self.assertFalse(looks_degenerate_completion("Probability: 0.42\nRationale: uncertain."))
+        self.assertFalse(looks_degenerate_completion("!!! Probability: 0.42"))
+
+    def test_grouped_reward_metrics_reports_punctuation_loop_rate(self):
+        metrics = grouped_reward_metrics(
+            ["!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!", "Probability: 0.50"],
+            [0, 0],
+            ["q1", "q1"],
+        )
+        self.assertEqual(metrics["parse_rate"], 0.5)
+        self.assertEqual(metrics["punctuation_loop_rate"], 0.5)
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import inspect
+import math
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,10 @@ from typing import Any
 from .data import SplitConfig, load_grouped_prompt_splits
 from .prompts import apply_chat_template
 from .reward import make_trl_reward_func
+
+
+class TrainingSafetyError(RuntimeError):
+    """Raised when live GRPO metrics indicate policy collapse."""
 
 
 def parse_args() -> argparse.Namespace:
@@ -139,6 +144,114 @@ def summarize_prompt_lengths(rows: list[dict[str, Any]], tokenizer: Any) -> dict
     }
 
 
+def _as_optional_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, str) and value.lower() in {"none", "nan", "null"}:
+        return math.nan
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _safety_config(train_cfg: dict[str, Any]) -> dict[str, Any]:
+    safety_cfg = train_cfg.get("safety", {})
+    if safety_cfg is None:
+        safety_cfg = {}
+    if not isinstance(safety_cfg, dict):
+        raise ValueError("training.safety must be a mapping when provided")
+    return safety_cfg
+
+
+def validate_training_safety_config(train_cfg: dict[str, Any]) -> None:
+    """Reject settings that are known to make collapse hard to diagnose."""
+
+    safety_cfg = _safety_config(train_cfg)
+    if bool(safety_cfg.get("enabled", True)):
+        min_parse_rate = float(safety_cfg.get("min_reward_parse_rate", 0.95))
+        max_zero_std = float(safety_cfg.get("max_frac_reward_zero_std", 0.95))
+        max_punctuation_loop_rate = float(safety_cfg.get("max_punctuation_loop_rate", 0.0))
+        if not 0.0 <= min_parse_rate <= 1.0:
+            raise ValueError("training.safety.min_reward_parse_rate must be in [0, 1]")
+        if not 0.0 <= max_zero_std <= 1.0:
+            raise ValueError("training.safety.max_frac_reward_zero_std must be in [0, 1]")
+        if not 0.0 <= max_punctuation_loop_rate <= 1.0:
+            raise ValueError("training.safety.max_punctuation_loop_rate must be in [0, 1]")
+
+    parse_fail_reward = float(train_cfg.get("parse_fail_reward", -1.0))
+    if parse_fail_reward > -1.0:
+        raise ValueError("training.parse_fail_reward should be <= -1.0 for robust format pressure")
+
+
+def build_training_safety_callback(callback_cls: Any, train_cfg: dict[str, Any]) -> Any | None:
+    """Create a TrainerCallback that aborts runs before collapse checkpoints are saved.
+
+    The previous failed run showed the characteristic sequence
+    ``reward_parse_rate < 1 -> grad_norm nan -> repeated punctuation outputs``.
+    This guard stops as soon as those live metrics become unsafe.
+    """
+
+    safety_cfg = _safety_config(train_cfg)
+    if not bool(safety_cfg.get("enabled", True)):
+        return None
+
+    min_parse_rate = float(safety_cfg.get("min_reward_parse_rate", 0.95))
+    max_zero_std = float(safety_cfg.get("max_frac_reward_zero_std", 0.95))
+    max_punctuation_loop_rate = float(safety_cfg.get("max_punctuation_loop_rate", 0.0))
+    start_step = int(safety_cfg.get("start_step", 1))
+    fail_on_nonfinite_grad_norm = bool(safety_cfg.get("fail_on_nonfinite_grad_norm", True))
+    fail_on_missing_kl = bool(safety_cfg.get("fail_on_missing_kl", False))
+
+    class TrainingSafetyCallback(callback_cls):  # type: ignore[misc, valid-type]
+        def on_log(self, args: Any, state: Any, control: Any, logs: dict[str, Any] | None = None, **kwargs: Any):
+            del args, kwargs
+            if not logs:
+                return control
+            step = int(getattr(state, "global_step", 0) or 0)
+            if step < start_step:
+                return control
+
+            failures: list[str] = []
+            parse_rate = _as_optional_float(logs.get("reward_parse_rate"))
+            if parse_rate is not None and math.isfinite(parse_rate) and parse_rate < min_parse_rate:
+                failures.append(f"reward_parse_rate={parse_rate:.4g} < {min_parse_rate:.4g}")
+
+            zero_std = _as_optional_float(logs.get("frac_reward_zero_std"))
+            if zero_std is not None and math.isfinite(zero_std) and zero_std > max_zero_std:
+                failures.append(f"frac_reward_zero_std={zero_std:.4g} > {max_zero_std:.4g}")
+
+            punctuation_loop_rate = _as_optional_float(logs.get("reward_punctuation_loop_rate"))
+            if (
+                punctuation_loop_rate is not None
+                and math.isfinite(punctuation_loop_rate)
+                and punctuation_loop_rate > max_punctuation_loop_rate
+            ):
+                failures.append(
+                    f"reward_punctuation_loop_rate={punctuation_loop_rate:.4g} "
+                    f"> {max_punctuation_loop_rate:.4g}"
+                )
+
+            grad_norm = _as_optional_float(logs.get("grad_norm"))
+            if fail_on_nonfinite_grad_norm and grad_norm is not None and not math.isfinite(grad_norm):
+                failures.append(f"grad_norm={logs.get('grad_norm')!r} is non-finite")
+
+            kl = _as_optional_float(logs.get("kl"))
+            if fail_on_missing_kl and "kl" in logs and (kl is None or not math.isfinite(kl)):
+                failures.append(f"kl={logs.get('kl')!r} is missing/non-finite")
+
+            if failures:
+                control.should_training_stop = True
+                joined = "; ".join(failures)
+                raise TrainingSafetyError(
+                    f"GRPO safety stop at step {step}: {joined}. "
+                    "Use the most recent earlier checkpoint; do not use this stopped state."
+                )
+            return control
+
+    return TrainingSafetyCallback()
+
+
 def validate_training_layout(
     splits: dict[str, list[dict[str, Any]]],
     data_cfg: dict[str, Any],
@@ -178,6 +291,7 @@ def validate_training_layout(
             "training.train_sampling_strategy must be sequential/none for grouped paraphrase rewards; "
             f"got {sampling_strategy!r}"
         )
+    validate_training_safety_config(train_cfg)
     validate_contiguous_group_batches(splits["train"], prompt_batch_size, group_size)
     return group_size, train_batch_size, prompt_batch_size
 
@@ -233,7 +347,7 @@ def main() -> int:
     try:
         from datasets import Dataset
         from peft import LoraConfig
-        from transformers import AutoTokenizer
+        from transformers import AutoTokenizer, TrainerCallback
         from trl import GRPOConfig, GRPOTrainer
     except ImportError as exc:
         raise SystemExit(
@@ -375,7 +489,14 @@ def main() -> int:
         trainer_kwargs["processing_class"] = tokenizer
 
     trainer = GRPOTrainer(**trainer_kwargs)
-    trainer.train()
+    safety_callback = build_training_safety_callback(TrainerCallback, train_cfg)
+    if safety_callback is not None:
+        trainer.add_callback(safety_callback)
+
+    try:
+        trainer.train()
+    except TrainingSafetyError as exc:
+        raise SystemExit(str(exc)) from exc
     trainer.save_model()
     return 0
 

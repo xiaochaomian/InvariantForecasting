@@ -14,6 +14,7 @@ _EXPLICIT_PROBABILITY_PATTERN = re.compile(
     r"(\d{1,3}\s*%|(?:0(?:\.\d+)?|1(?:\.0+)?|\.\d+))(?![\d.%])",
     re.I,
 )
+_PUNCTUATION_CHARS = set("!?.。，,;:|-_~`'\"*#=+\\/()[]{}<>")
 
 
 @dataclass(frozen=True)
@@ -56,6 +57,23 @@ def parse_probability(text: Any) -> float | None:
         if 0.0 <= value <= 1.0:
             return value
     return None
+
+
+def looks_degenerate_completion(text: Any, min_length: int = 16) -> bool:
+    """Detect collapsed punctuation loops such as repeated exclamation marks."""
+
+    if text is None:
+        return False
+    raw = str(text).strip()
+    if len(raw) < min_length:
+        return False
+    if any(char.isalnum() for char in raw):
+        return False
+    punctuation = [char for char in raw if not char.isspace()]
+    if not punctuation or any(char not in _PUNCTUATION_CHARS for char in punctuation):
+        return False
+    most_common = max(punctuation.count(char) for char in set(punctuation))
+    return most_common / len(punctuation) >= 0.9
 
 
 def brier_reward(probability: float, outcome: int) -> float:
@@ -121,6 +139,7 @@ def grouped_reward_metrics(
     y_values = [int(y) for y in outcomes]
     gids = [str(g) for g in group_ids]
     probabilities = [parse_probability(text) for text in texts]
+    degenerate_count = sum(looks_degenerate_completion(text) for text in texts)
 
     parsed_by_group: dict[str, list[float]] = defaultdict(list)
     outcome_by_group: dict[str, int] = {}
@@ -149,6 +168,7 @@ def grouped_reward_metrics(
         "paraphrase_variance": sum(variances) / len(variances) if variances else math.nan,
         "mean_probability": sum(parsed_probabilities) / len(parsed_probabilities)
         if parsed_probabilities else math.nan,
+        "punctuation_loop_rate": degenerate_count / len(texts) if texts else 0.0,
     }
 
 
