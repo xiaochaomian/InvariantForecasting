@@ -198,12 +198,38 @@ def summarize(predictions: list[dict[str, Any]]) -> dict[str, Any]:
         )
 
     parseable_groups = [row for row in group_rows if row["brier"] is not None]
+    outcomes = [int(row["outcome"]) for row in parseable_groups]
+    consensus_probs = [float(row["consensus_probability"]) for row in parseable_groups]
+    yes_rate = mean(outcomes) if outcomes else math.nan
+    inverted_briers = [
+        (probability - (1 - outcome)) ** 2
+        for probability, outcome in zip(consensus_probs, outcomes)
+    ]
+    base_rate_briers = [
+        (yes_rate - outcome) ** 2
+        for outcome in outcomes
+    ] if outcomes else []
+    outcome0_probs = [
+        probability
+        for probability, outcome in zip(consensus_probs, outcomes)
+        if outcome == 0
+    ]
+    outcome1_probs = [
+        probability
+        for probability, outcome in zip(consensus_probs, outcomes)
+        if outcome == 1
+    ]
     return {
         "n_groups": len(group_rows),
         "n_variant_predictions": len(predictions),
         "variant_coverage": mean(float(item["parseable"]) for item in predictions) if predictions else 0.0,
         "group_full_coverage": mean(row["coverage"] == 1.0 for row in group_rows) if group_rows else 0.0,
+        "yes_rate": yes_rate,
         "mean_brier": mean(row["brier"] for row in parseable_groups) if parseable_groups else math.nan,
+        "mean_brier_if_labels_inverted": mean(inverted_briers) if inverted_briers else math.nan,
+        "mean_brier_base_rate": mean(base_rate_briers) if base_rate_briers else math.nan,
+        "mean_prob_outcome_0": mean(outcome0_probs) if outcome0_probs else math.nan,
+        "mean_prob_outcome_1": mean(outcome1_probs) if outcome1_probs else math.nan,
         "mean_parasd": mean(row["parasd"] for row in parseable_groups) if parseable_groups else math.nan,
         "groups": group_rows,
     }
