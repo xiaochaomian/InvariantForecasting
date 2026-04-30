@@ -7,6 +7,7 @@ import random
 import re
 from collections import defaultdict
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,11 @@ CONTEXT_FIELDS = (
     "market_info_open_datetime",
     "market_info_close_datetime",
     "market_info_resolution_criteria",
+)
+FORBIDDEN_PROMPT_MARKERS = (
+    "resolved_to",
+    "forecastbench_resolution_snapshot",
+    "_resolution_set.json",
 )
 
 
@@ -44,6 +50,26 @@ def read_jsonl(path: str | Path) -> list[dict[str, Any]]:
             if line.strip():
                 rows.append(json.loads(line))
     return rows
+
+
+def parse_datetime(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text or text.upper() == "N/A":
+        return None
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        try:
+            parsed = datetime.strptime(text[:10], "%Y-%m-%d")
+        except ValueError:
+            return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def group_paraphrases(rows: list[dict[str, Any]], expected_group_size: int = 5) -> dict[str, list[dict[str, Any]]]:
@@ -92,6 +118,21 @@ def make_prompt_row(row: dict[str, Any]) -> dict[str, Any]:
         )
     if not row.get("freeze_datetime"):
         raise ValueError(f"Question {row.get('id')!r} is missing freeze_datetime/forecast date")
+    freeze_datetime = parse_datetime(row.get("freeze_datetime"))
+    resolved_at = parse_datetime(row.get("resolved_at"))
+    if freeze_datetime is None or resolved_at is None:
+        raise ValueError(f"Question {row.get('id')!r} has invalid forecast/resolution dates")
+    if freeze_datetime >= resolved_at:
+        raise ValueError(
+            f"Question {row.get('id')!r} has forecast date {row.get('freeze_datetime')!r} "
+            f"not before resolution date {row.get('resolved_at')!r}"
+        )
+    market_close = parse_datetime(row.get("market_info_close_datetime"))
+    if market_close is not None and market_close < freeze_datetime:
+        raise ValueError(
+            f"Question {row.get('id')!r} has market close {row.get('market_info_close_datetime')!r} "
+            f"before forecast date {row.get('freeze_datetime')!r}"
+        )
     if not row.get("background") and not row.get("resolution_criteria"):
         raise ValueError(f"Question {row.get('id')!r} is missing ForecastBench context")
 
@@ -113,6 +154,9 @@ def make_prompt_row(row: dict[str, Any]) -> dict[str, Any]:
     }
     for field in CONTEXT_FIELDS:
         output[field] = row.get(field)
+    for marker in FORBIDDEN_PROMPT_MARKERS:
+        if marker in output["prompt"]:
+            raise ValueError(f"Question {row.get('id')!r} prompt contains forbidden marker {marker!r}")
     return output
 
 

@@ -27,7 +27,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--run-name", default=None)
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--max-prompt-length", type=int, default=0, help="Tokenizer prompt cap; 0 uses config/default.")
-    parser.add_argument("--max-new-tokens", type=int, default=96)
+    parser.add_argument("--max-new-tokens", type=int, default=0, help="Generation cap; 0 uses config/default.")
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--no-chat-template", action="store_true", help="Disable tokenizer chat-template formatting.")
     parser.add_argument("--limit-groups", type=int, default=0, help="Debug cap on number of question groups.")
@@ -239,13 +239,16 @@ def main() -> int:
     output_dir = Path(args.output_dir) / run_name / args.split
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    train_cfg = config.get("training", {})
+    max_new_tokens = args.max_new_tokens or int(train_cfg.get("max_completion_length", 96))
+
     completions = mock_outputs(rows) if args.dry_run else generate_outputs(
         rows,
         args.model,
         args.base_model,
         args.batch_size,
-        args.max_prompt_length or int(config.get("training", {}).get("max_prompt_length", 0)),
-        args.max_new_tokens,
+        args.max_prompt_length or int(train_cfg.get("max_prompt_length", 0)),
+        max_new_tokens,
         args.temperature,
         not args.no_chat_template,
     )

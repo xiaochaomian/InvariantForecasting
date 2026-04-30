@@ -32,8 +32,7 @@ Market timing:
 
 Put your forecast on the first line exactly as:
 Probability: <number between 0 and 1>
-
-Then add a short rationale on the following lines.
+Do not include any other text.
 """
 
 
