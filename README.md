@@ -104,7 +104,11 @@ These keep the same Brier / frame-invariance reward but use safer optimization:
 - `learning_rate: 2e-7`, `beta: 0.3`, `max_grad_norm: 0.05`
 - short checkpoint cadence: `save_steps: 5`, `max_steps: 30`
 - `parse_fail_reward: -2.0`
-- live safety guards that abort training before saving a collapsed state if parse rate drops, gradient norm becomes non-finite, reward variance degenerates, or repeated punctuation loops appear
+- live safety guards that abort training before saving a collapsed state if parse rate drops, gradient norm becomes non-finite, or repeated punctuation loops appear
+
+`frac_reward_zero_std` is logged but is not a hard stop by default. It can be
+high on small grouped batches even when parse rate is perfect and gradients are
+finite, so hard-stopping on that metric alone creates false positives.
 
 Run lambda=1 first:
 

@@ -60,6 +60,31 @@ class TrainingSafetyTests(unittest.TestCase):
         with self.assertRaises(TrainingSafetyError):
             callback.on_log(None, _State(), _Control(), {"reward_punctuation_loop_rate": "0.04"})
 
+    def test_safety_callback_does_not_stop_on_zero_std_by_default(self):
+        callback = build_training_safety_callback(_CallbackBase, {"safety": {"enabled": True}})
+        control = _Control()
+        result = callback.on_log(
+            None,
+            _State(),
+            control,
+            {
+                "frac_reward_zero_std": "1",
+                "reward_parse_rate": "1",
+                "reward_punctuation_loop_rate": "0",
+                "grad_norm": "0.05",
+            },
+        )
+        self.assertIs(result, control)
+        self.assertFalse(control.should_training_stop)
+
+    def test_safety_callback_can_stop_on_zero_std_when_configured(self):
+        callback = build_training_safety_callback(
+            _CallbackBase,
+            {"safety": {"enabled": True, "fail_on_high_frac_reward_zero_std": True}},
+        )
+        with self.assertRaises(TrainingSafetyError):
+            callback.on_log(None, _State(), _Control(), {"frac_reward_zero_std": "1"})
+
     def test_safety_callback_stops_on_nonfinite_grad_norm(self):
         callback = build_training_safety_callback(_CallbackBase, {"safety": {"enabled": True}})
         with self.assertRaises(TrainingSafetyError):
@@ -78,6 +103,7 @@ class TrainingSafetyTests(unittest.TestCase):
                 self.assertEqual(train_cfg["save_steps"], 5)
                 self.assertLessEqual(train_cfg["learning_rate"], 2e-7)
                 self.assertTrue(train_cfg["safety"]["enabled"])
+                self.assertFalse(train_cfg["safety"]["fail_on_high_frac_reward_zero_std"])
 
 
 if __name__ == "__main__":

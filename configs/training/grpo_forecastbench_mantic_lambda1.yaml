@@ -68,6 +68,7 @@ training:
     start_step: 1
     min_reward_parse_rate: 0.95
     max_frac_reward_zero_std: 0.95
+    fail_on_high_frac_reward_zero_std: false
     max_punctuation_loop_rate: 0.0
     fail_on_nonfinite_grad_norm: true
     fail_on_missing_kl: false

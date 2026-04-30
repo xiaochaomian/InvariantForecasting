@@ -201,6 +201,7 @@ def build_training_safety_callback(callback_cls: Any, train_cfg: dict[str, Any])
     max_punctuation_loop_rate = float(safety_cfg.get("max_punctuation_loop_rate", 0.0))
     start_step = int(safety_cfg.get("start_step", 1))
     fail_on_nonfinite_grad_norm = bool(safety_cfg.get("fail_on_nonfinite_grad_norm", True))
+    fail_on_high_zero_std = bool(safety_cfg.get("fail_on_high_frac_reward_zero_std", False))
     fail_on_missing_kl = bool(safety_cfg.get("fail_on_missing_kl", False))
 
     class TrainingSafetyCallback(callback_cls):  # type: ignore[misc, valid-type]
@@ -218,7 +219,12 @@ def build_training_safety_callback(callback_cls: Any, train_cfg: dict[str, Any])
                 failures.append(f"reward_parse_rate={parse_rate:.4g} < {min_parse_rate:.4g}")
 
             zero_std = _as_optional_float(logs.get("frac_reward_zero_std"))
-            if zero_std is not None and math.isfinite(zero_std) and zero_std > max_zero_std:
+            if (
+                fail_on_high_zero_std
+                and zero_std is not None
+                and math.isfinite(zero_std)
+                and zero_std > max_zero_std
+            ):
                 failures.append(f"frac_reward_zero_std={zero_std:.4g} > {max_zero_std:.4g}")
 
             punctuation_loop_rate = _as_optional_float(logs.get("reward_punctuation_loop_rate"))
