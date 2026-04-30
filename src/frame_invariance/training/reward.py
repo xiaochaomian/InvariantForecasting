@@ -11,7 +11,7 @@ from typing import Any, Iterable
 
 _EXPLICIT_PROBABILITY_PATTERN = re.compile(
     r"(?:probability|final\s*(?:answer|forecast)?)\s*[:=]\s*"
-    r"([01](?:\.\d+)?|\.\d+|\d{1,3}\s*%)",
+    r"(\d{1,3}\s*%|(?:0(?:\.\d+)?|1(?:\.0+)?|\.\d+))(?![\d.%])",
     re.I,
 )
 
@@ -45,15 +45,16 @@ def parse_probability(text: Any) -> float | None:
         token = match.group(1).replace(" ", "")
         try:
             if token.endswith("%"):
-                value = float(token[:-1]) / 100.0
+                percent = float(token[:-1])
+                if 0.0 <= percent <= 100.0:
+                    return percent / 100.0
+                continue
             else:
                 value = float(token)
         except ValueError:
             continue
         if 0.0 <= value <= 1.0:
             return value
-        if 1.0 < value <= 100.0 and token.endswith("%"):
-            return value / 100.0
     return None
 
 
@@ -111,6 +112,46 @@ def grouped_frame_invariance_rewards(
     return rewards
 
 
+def grouped_reward_metrics(
+    completions: Iterable[Any],
+    outcomes: Iterable[int],
+    group_ids: Iterable[Any],
+) -> dict[str, float]:
+    texts = list(completions)
+    y_values = [int(y) for y in outcomes]
+    gids = [str(g) for g in group_ids]
+    probabilities = [parse_probability(text) for text in texts]
+
+    parsed_by_group: dict[str, list[float]] = defaultdict(list)
+    outcome_by_group: dict[str, int] = {}
+    for gid, probability, outcome in zip(gids, probabilities, y_values):
+        outcome_by_group[gid] = outcome
+        if probability is not None:
+            parsed_by_group[gid].append(probability)
+
+    consensus_briers: list[float] = []
+    variances: list[float] = []
+    parsed_probabilities: list[float] = []
+    for gid, values in parsed_by_group.items():
+        if not values:
+            continue
+        consensus = sum(values) / len(values)
+        outcome = outcome_by_group[gid]
+        consensus_briers.append((consensus - outcome) ** 2)
+        variances.append(sum((value - consensus) ** 2 for value in values) / len(values))
+        parsed_probabilities.extend(values)
+
+    return {
+        "parse_rate": sum(probability is not None for probability in probabilities) / len(probabilities)
+        if probabilities else 0.0,
+        "consensus_brier": sum(consensus_briers) / len(consensus_briers)
+        if consensus_briers else math.nan,
+        "paraphrase_variance": sum(variances) / len(variances) if variances else math.nan,
+        "mean_probability": sum(parsed_probabilities) / len(parsed_probabilities)
+        if parsed_probabilities else math.nan,
+    }
+
+
 def make_trl_reward_func(lambda_invariance: float, parse_fail_reward: float = -1.0):
     """Build a TRL-compatible reward function.
 
@@ -125,6 +166,12 @@ def make_trl_reward_func(lambda_invariance: float, parse_fail_reward: float = -1
         group_ids = kwargs.get("id") or kwargs.get("source_question_index")
         if outcomes is None or group_ids is None:
             raise KeyError("reward function requires outcome and id/source_question_index columns")
-        return grouped_frame_invariance_rewards(completions, outcomes, group_ids, config)
+        rewards = grouped_frame_invariance_rewards(completions, outcomes, group_ids, config)
+        log_metric = kwargs.get("log_metric")
+        if callable(log_metric):
+            for name, value in grouped_reward_metrics(completions, outcomes, group_ids).items():
+                if not math.isnan(value):
+                    log_metric(f"reward_{name}", value)
+        return rewards
 
     return reward_func

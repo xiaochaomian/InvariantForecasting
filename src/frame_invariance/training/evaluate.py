@@ -111,15 +111,16 @@ def generate_outputs(
         if max_prompt_length > 0:
             encode_kwargs["max_length"] = max_prompt_length
         encoded = tokenizer(prompts, **encode_kwargs).to(model.device)
+        generation_kwargs: dict[str, Any] = {
+            "max_new_tokens": max_new_tokens,
+            "do_sample": do_sample,
+            "pad_token_id": tokenizer.pad_token_id,
+            "eos_token_id": tokenizer.eos_token_id,
+        }
+        if do_sample:
+            generation_kwargs["temperature"] = temperature
         with torch.no_grad():
-            generated = model.generate(
-                **encoded,
-                max_new_tokens=max_new_tokens,
-                do_sample=do_sample,
-                temperature=temperature if do_sample else None,
-                pad_token_id=tokenizer.pad_token_id,
-                eos_token_id=tokenizer.eos_token_id,
-            )
+            generated = model.generate(**encoded, **generation_kwargs)
         input_length = encoded["input_ids"].shape[1]
         for sequence in generated:
             completion_tokens = sequence[input_length:]
@@ -201,6 +202,14 @@ def summarize(predictions: list[dict[str, Any]]) -> dict[str, Any]:
     outcomes = [int(row["outcome"]) for row in parseable_groups]
     consensus_probs = [float(row["consensus_probability"]) for row in parseable_groups]
     yes_rate = mean(outcomes) if outcomes else math.nan
+    eps = 1e-6
+    log_losses = [
+        -(
+            outcome * math.log(min(1 - eps, max(eps, probability)))
+            + (1 - outcome) * math.log(1 - min(1 - eps, max(eps, probability)))
+        )
+        for probability, outcome in zip(consensus_probs, outcomes)
+    ]
     inverted_briers = [
         (probability - (1 - outcome)) ** 2
         for probability, outcome in zip(consensus_probs, outcomes)
@@ -219,20 +228,81 @@ def summarize(predictions: list[dict[str, Any]]) -> dict[str, Any]:
         for probability, outcome in zip(consensus_probs, outcomes)
         if outcome == 1
     ]
+    parsed_variant_pairs = [
+        (float(prediction["probability"]), int(prediction["outcome"]))
+        for prediction in predictions
+        if prediction["probability"] is not None
+    ]
+    ece_10 = expected_calibration_error(consensus_probs, outcomes, n_bins=10)
+    mean_brier = mean(row["brier"] for row in parseable_groups) if parseable_groups else math.nan
+    mean_parasd = mean(row["parasd"] for row in parseable_groups) if parseable_groups else math.nan
     return {
         "n_groups": len(group_rows),
+        "n_parseable_groups": len(parseable_groups),
         "n_variant_predictions": len(predictions),
         "variant_coverage": mean(float(item["parseable"]) for item in predictions) if predictions else 0.0,
         "group_full_coverage": mean(row["coverage"] == 1.0 for row in group_rows) if group_rows else 0.0,
         "yes_rate": yes_rate,
-        "mean_brier": mean(row["brier"] for row in parseable_groups) if parseable_groups else math.nan,
+        "mean_brier": mean_brier,
         "mean_brier_if_labels_inverted": mean(inverted_briers) if inverted_briers else math.nan,
         "mean_brier_base_rate": mean(base_rate_briers) if base_rate_briers else math.nan,
+        "mean_brier_constant_0_5": mean((0.5 - outcome) ** 2 for outcome in outcomes) if outcomes else math.nan,
+        "mean_brier_variant": (
+            mean((probability - outcome) ** 2 for probability, outcome in parsed_variant_pairs)
+            if parsed_variant_pairs else math.nan
+        ),
+        "mean_log_loss": mean(log_losses) if log_losses else math.nan,
+        "ece_10": ece_10,
         "mean_prob_outcome_0": mean(outcome0_probs) if outcome0_probs else math.nan,
         "mean_prob_outcome_1": mean(outcome1_probs) if outcome1_probs else math.nan,
-        "mean_parasd": mean(row["parasd"] for row in parseable_groups) if parseable_groups else math.nan,
+        "mean_parasd": mean_parasd,
+        "frie_lambda_0": mean_brier,
+        "frie_lambda_1": mean_brier + mean_parasd if parseable_groups else math.nan,
+        "frie_lambda_5": mean_brier + 5 * mean_parasd if parseable_groups else math.nan,
         "groups": group_rows,
     }
+
+
+def expected_calibration_error(
+    probabilities: list[float],
+    outcomes: list[int],
+    n_bins: int = 10,
+) -> float:
+    if not probabilities:
+        return math.nan
+    total = len(probabilities)
+    ece = 0.0
+    for bin_index in range(n_bins):
+        lo = bin_index / n_bins
+        hi = (bin_index + 1) / n_bins
+        if bin_index == n_bins - 1:
+            pairs = [
+                (probability, outcome)
+                for probability, outcome in zip(probabilities, outcomes)
+                if lo <= probability <= hi
+            ]
+        else:
+            pairs = [
+                (probability, outcome)
+                for probability, outcome in zip(probabilities, outcomes)
+                if lo <= probability < hi
+            ]
+        if not pairs:
+            continue
+        confidence = mean(probability for probability, _ in pairs)
+        accuracy = mean(outcome for _, outcome in pairs)
+        ece += (len(pairs) / total) * abs(confidence - accuracy)
+    return ece
+
+
+def json_safe(value: Any) -> Any:
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if isinstance(value, dict):
+        return {key: json_safe(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [json_safe(item) for item in value]
+    return value
 
 
 def write_group_summary(path: Path, group_rows: list[dict[str, Any]]) -> None:
@@ -253,6 +323,7 @@ def main() -> int:
             train_frac=float(data_cfg.get("train_frac", 0.8)),
             val_frac=float(data_cfg.get("val_frac", 0.1)),
             seed=int(data_cfg.get("seed", 17)),
+            stratify_by=str(data_cfg.get("stratify_by", "resolved_month")),
         ),
         expected_group_size=int(data_cfg.get("group_size", 5)),
     )
@@ -281,9 +352,13 @@ def main() -> int:
     predictions = write_variant_predictions(output_dir / "variant_predictions.csv", rows, completions)
     summary = summarize(predictions)
     write_group_summary(output_dir / "group_metrics.csv", summary.pop("groups"))
-    (output_dir / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
+    summary_output = json_safe(summary)
+    (output_dir / "summary.json").write_text(
+        json.dumps(summary_output, indent=2, sort_keys=True, allow_nan=False),
+        encoding="utf-8",
+    )
 
-    print(json.dumps(summary, indent=2, sort_keys=True))
+    print(json.dumps(summary_output, indent=2, sort_keys=True, allow_nan=False))
     print(f"variant predictions: {output_dir / 'variant_predictions.csv'}")
     print(f"group metrics:       {output_dir / 'group_metrics.csv'}")
     print(f"summary:             {output_dir / 'summary.json'}")

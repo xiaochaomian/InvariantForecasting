@@ -1,151 +1,151 @@
 # InvariantForecasting
 
-data-prepping so far
+Frame-invariant RL post-training for binary LLM forecasting.
 
-## First run results
+This repo is set up for the current ForecastBench pilot:
 
-Full documentation for the first end-to-end run is in [`firstrundocumentation.tex`](firstrundocumentation.tex).
+- Base model: `Qwen/Qwen2.5-7B-Instruct`
+- Data: ForecastBench/current questions resolved after `2025-08-31`
+- Paraphrases: 5 variants per question, deterministic rule-based pack
+- Splits: 80/10/10 by question group, stratified by resolution month
+- Main runs: base eval, GRPO `lambda_invariance=0`, GRPO `lambda_invariance=1`
 
-Important caveat: these first-run numbers are pre-fix exploratory results. The
-run used prompts where many ForecastBench template dates were still literal
-placeholders such as `{resolution_date}` and `{forecast_due_date}`, and the
-paraphrase file did not carry full background/resolution context. Treat the table
-below as a debugging baseline, not as a clean research result. Regenerate
-paraphrases and rerun evaluation/training with the current code before reporting
-new results.
+The full project briefing in `reference/briefing.html` describes the paper-target
+protocol: Metaculus scale data, `K=8`, API paraphrasers, NLI filtering, and held-out
+paraphraser evaluation. This repo now implements the smaller, reproducible
+ForecastBench pilot. Do not describe it as the full paper protocol until those
+data/paraphraser pieces are added.
 
-Held-out test split: 60 ForecastBench/current question groups, 5 paraphrases per group, 300 variant predictions total.
+## Data
 
-| Run | Objective | Mean Brier (lower) | Mean ParaSD (lower) | Variant Coverage | Full-Group Coverage |
-|---|---|---:|---:|---:|---:|
-| Base Qwen2.5-7B | No RL, strict parser | **0.2436** | 0.1229 | 0.6667 | 0.2833 |
-| GRPO lambda=0 | Brier reward only | 0.2508 | 0.0894 | **1.0000** | **1.0000** |
-| GRPO lambda=1 | Brier + paraphrase variance penalty | 0.2495 | **0.0800** | **1.0000** | **1.0000** |
-
-Main first-run finding: `lambda=1` reduced paraphrase standard deviation by 34.9% vs. base and 10.5% vs. `lambda=0`, without an additional Brier cost relative to outcome-only GRPO. Base still has the best Brier, but with substantially lower parse coverage.
-
-## ForecastBench/current data
-
-https://huggingface.co/datasets/forecastingresearch/forecastbench-datasets
-
-Post-August resolution dates: 598 unique resolved binary questions.
+Fetch ForecastBench/current rows:
 
 ```bash
-python3 scripts/fetch_forecastbench_current.py --since 2025-08-31 --max-questions 2000
+PYTHONPATH=src python3 scripts/fetch_forecastbench_current.py \
+  --since 2025-08-31 \
+  --max-questions 2000
 ```
 
-So far this is limited to 598 rows; we can look for other data sources.
+Generate the 5x paraphrase pack:
+
+```bash
+PYTHONPATH=src python3 scripts/make_forecastbench_paraphrases.py
+```
 
 Outputs:
+
 - `data/raw/forecastbench_current_after_2025-08-31.jsonl`
 - `data/processed/forecastbench_current_after_2025-08-31.csv`
-
-## ForecastBench/current paraphrases
-
-```bash
-python3 scripts/make_forecastbench_paraphrases.py
-```
-
-Output:
 - `data/paraphrased/forecastbench_current_after_2025-08-31_5x.jsonl`
 - `data/processed/forecastbench_current_after_2025-08-31_5x_paraphrases.csv`
+- `human/questions_and_paraphrases.txt`
 
-These are long-form files with 2,990 rows: 598 source questions * 5 variants.
-Every five consecutive rows are one question group. `variant_index=0` is the
-original question; `variant_index=1..4` are deterministic semantic paraphrases.
-The file also keeps `source_question_index`, `id`, `variant_id`, `source`,
-`outcome`, and `resolved_at` for safer downstream joins.
-
-Big note: I emailed Metaculus, so we may be able to use their data later.
-
-Open the processed CSV with a spreadsheet app/importer, or use the raw JSONL for programmatic work.
-
-## GRPO post-training scaffold
-
-The training scaffold follows the paper proposal: per-paraphrase Brier reward plus an explicit variance penalty across semantically equivalent question frames.
-
-Reward:
-
-```text
-R_i = -(p_i - Y)^2 - lambda * (p_i - mean_group_probability)^2
-```
-
-Dry-run the data split and reward wiring locally:
+Before spending GPU time, run:
 
 ```bash
-PYTHONPATH=src python3 -m frame_invariance.training.train_grpo \
-  --config configs/training/grpo_forecastbench.yaml \
-  --dry-run
+PYTHONPATH=src python3 scripts/audit_forecastbench.py
+PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_*.py'
 ```
 
-Run the actual GRPO job in a GPU environment after installing dependencies:
+Expected current audit shape:
+
+- 598 groups / 2,990 rows
+- Train: 478 groups
+- Validation: 60 groups
+- Test: 60 groups
+- Forecast dates: `2025-10-16` to `2025-11-27`
+- Resolution dates: `2025-10-27` to `2025-12-31`
+
+The audit uses a conservative `2024-06-30` model-cutoff guard. All forecast and
+resolution dates are after that, so the current questions are post-cutoff for Qwen2.5
+under that guard.
+
+## RunPod Setup
 
 ```bash
+cd /workspace
+git clone https://github.com/xiaochaomian/InvariantForecasting.git
+cd InvariantForecasting
+
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
 pip install -e .
-PYTHONPATH=src python3 -m frame_invariance.training.train_grpo \
-  --config configs/training/grpo_forecastbench.yaml \
-  --preflight
-PYTHONPATH=src python3 -m frame_invariance.training.train_grpo \
-  --config configs/training/grpo_forecastbench.yaml
+
+mkdir -p logs
+PYTHONPATH=src python3 scripts/audit_forecastbench.py
+PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_*.py'
 ```
 
-Always run `--preflight` on the GPU machine before starting training. It checks
-dependency compatibility, chat-template rendering, tokenized prompt lengths, and
-paraphrase group/batch alignment without loading the model.
-
-Current split from the 5x paraphrase file:
-
-- train: 478 question groups / 2,390 paraphrase rows
-- validation: 60 question groups / 300 paraphrase rows
-- test: 60 question groups / 300 paraphrase rows
-
-`lambda_invariance` in `configs/training/grpo_forecastbench.yaml` controls the explicit paraphrase-variance penalty. Set it to `0.0` for the outcome-only Brier RL baseline and positive values for the proposed frame-invariant objective.
-
-## Getting actual results
-
-After a model is available on a GPU node, evaluate the base model on the held-out test split:
+## Base Eval
 
 ```bash
 PYTHONPATH=src python -m frame_invariance.training.evaluate \
-  --config configs/training/grpo_forecastbench.yaml \
+  --config configs/training/grpo_forecastbench_lambda1.yaml \
   --model Qwen/Qwen2.5-7B-Instruct \
-  --run-name base_qwen7b_strict \
+  --run-name base_qwen7b_clean \
   --split test \
-  --batch-size 4
+  --batch-size 4 \
+  2>&1 | tee logs/base_qwen7b_clean_$(date +%Y%m%d_%H%M%S).log
 ```
 
-This writes:
+This writes `results/base_qwen7b_clean/test/{summary.json,group_metrics.csv,variant_predictions.csv}`.
 
-- `results/base_qwen7b_strict/test/summary.json`
-- `results/base_qwen7b_strict/test/group_metrics.csv`
-- `results/base_qwen7b_strict/test/variant_predictions.csv`
-
-Then train/evaluate the outcome-only baseline by setting `lambda_invariance: 0.0` and a lambda0 output directory in the config, running GRPO, and evaluating the trained checkpoint:
+## GRPO Lambda 0
 
 ```bash
+PYTHONPATH=src python -m frame_invariance.training.train_grpo \
+  --config configs/training/grpo_forecastbench_lambda0.yaml \
+  --preflight
+
+PYTHONPATH=src python -m frame_invariance.training.train_grpo \
+  --config configs/training/grpo_forecastbench_lambda0.yaml \
+  2>&1 | tee logs/grpo_lambda0_$(date +%Y%m%d_%H%M%S).log
+
 PYTHONPATH=src python -m frame_invariance.training.evaluate \
-  --config configs/training/grpo_forecastbench.yaml \
+  --config configs/training/grpo_forecastbench_lambda0.yaml \
   --model outputs/grpo_forecastbench_qwen7b_lambda0 \
   --base-model Qwen/Qwen2.5-7B-Instruct \
   --run-name grpo_lambda0 \
   --split test \
-  --batch-size 4
+  --batch-size 4 \
+  2>&1 | tee logs/eval_grpo_lambda0_$(date +%Y%m%d_%H%M%S).log
 ```
 
-Then train/evaluate the proposed invariant objective with `lambda_invariance: 1.0`:
+## GRPO Lambda 1
 
 ```bash
+PYTHONPATH=src python -m frame_invariance.training.train_grpo \
+  --config configs/training/grpo_forecastbench_lambda1.yaml \
+  --preflight
+
+PYTHONPATH=src python -m frame_invariance.training.train_grpo \
+  --config configs/training/grpo_forecastbench_lambda1.yaml \
+  2>&1 | tee logs/grpo_lambda1_$(date +%Y%m%d_%H%M%S).log
+
 PYTHONPATH=src python -m frame_invariance.training.evaluate \
-  --config configs/training/grpo_forecastbench.yaml \
+  --config configs/training/grpo_forecastbench_lambda1.yaml \
   --model outputs/grpo_forecastbench_qwen7b_lambda1 \
   --base-model Qwen/Qwen2.5-7B-Instruct \
   --run-name grpo_lambda1 \
   --split test \
-  --batch-size 4
+  --batch-size 4 \
+  2>&1 | tee logs/eval_grpo_lambda1_$(date +%Y%m%d_%H%M%S).log
 ```
 
-The paper table comes from each `summary.json`:
+## Metrics
 
-- `mean_brier`: forecasting accuracy, lower is better
-- `mean_parasd`: paraphrase standard deviation, lower is better
-- `variant_coverage`: fraction of paraphrase forecasts with parseable probabilities
+Each evaluation summary reports:
+
+- `mean_brier`: Brier on group consensus probability
+- `mean_parasd`: probability standard deviation across paraphrases
+- `mean_brier_base_rate` and `mean_brier_constant_0_5`: sanity baselines
+- `mean_brier_if_labels_inverted`: label-direction diagnostic
+- `mean_brier_variant`: per-variant Brier before consensus
+- `mean_log_loss` and `ece_10`: calibration hygiene
+- `frie_lambda_0`, `frie_lambda_1`, `frie_lambda_5`: combined frontier metrics
+- `variant_coverage` and `group_full_coverage`: parser coverage
+
+Use the base eval, lambda 0 eval, and lambda 1 eval summaries for the first clean
+comparison table. The old exploratory first-run artifacts were removed because they
+were generated before the prompt/date/paraphrase fixes.

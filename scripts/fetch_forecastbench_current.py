@@ -18,7 +18,7 @@ HF_REPO = "forecastingresearch/forecastbench-datasets"
 HF_BASE = f"https://huggingface.co/datasets/{HF_REPO}"
 HF_API = f"https://huggingface.co/api/datasets/{HF_REPO}/tree/main"
 DEFAULT_SINCE = "2025-08-31"
-DEFAULT_MAX_QUESTIONS = 500
+DEFAULT_MAX_QUESTIONS = 2000
 
 
 def parse_args() -> argparse.Namespace:

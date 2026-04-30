@@ -84,6 +84,41 @@ def strip_question_mark(text: str) -> str:
     return clean(text).rstrip("?").strip()
 
 
+def fixed_article_for_week_count(count: str) -> str:
+    return "an" if count[:1] in {"8", "1"} else "a"
+
+
+def without_leading_the(text: str) -> str:
+    return re.sub(r"^the\s+", "", text, flags=re.IGNORECASE)
+
+
+def clarify_relative_year(row: dict[str, Any], question: str) -> str:
+    year = date_part(row.get("resolved_at"))[:4] if date_part(row.get("resolved_at")) else None
+    if year != "2025":
+        return question
+
+    clarified = question
+    for month_day in ("October 31", "November 30", "December 31"):
+        clarified = re.sub(
+            rf"{month_day}(?!,?\s*20\d{{2}})",
+            f"{month_day}, {year}",
+            clarified,
+        )
+    for month in ("October", "November", "December"):
+        clarified = re.sub(
+            rf"\b(in|during|before|after) {month}\b(?!\s+20\d{{2}})",
+            rf"\1 {month} {year}",
+            clarified,
+            flags=re.IGNORECASE,
+        )
+    clarified = re.sub(r"\bEOY2025\b", f"end of {year}", clarified, flags=re.IGNORECASE)
+    clarified = re.sub(r"\bEOY\b", f"the end of {year}", clarified, flags=re.IGNORECASE)
+    clarified = re.sub(r"\bend of the year\b", f"end of {year}", clarified, flags=re.IGNORECASE)
+    clarified = re.sub(r"\bthe year ends\b", f"{year} ends", clarified, flags=re.IGNORECASE)
+    clarified = re.sub(r"\bthis year\b", f"in {year}", clarified, flags=re.IGNORECASE)
+    return clarified
+
+
 def stock_price_paraphrases(question: str) -> list[str] | None:
     match = re.match(
         r"^Will (.+?)'s market close price on \{resolution_date\} be higher than its market close price on \{forecast_due_date\}\?",
@@ -224,20 +259,20 @@ def wiki_fide_rank_paraphrases(question: str) -> list[str] | None:
     player = match.group(1)
     return [
         (
-            f"Using Wikipedia as the source, will {player}'s FIDE ranking on {RESOLUTION_DATE} "
-            f"be as high as or higher than their ranking on {FORECAST_DUE_DATE}?"
+            f"Using Wikipedia as the source, will {player}'s FIDE rank position on {RESOLUTION_DATE} "
+            f"be numerically no higher than their rank position on {FORECAST_DUE_DATE}?"
         ),
         (
-            f"According to Wikipedia, is {player} ranked at least as highly by FIDE on "
-            f"{RESOLUTION_DATE} as they were on {FORECAST_DUE_DATE}?"
+            f"According to Wikipedia, will {player} be ranked the same or better by FIDE on "
+            f"{RESOLUTION_DATE} than on {FORECAST_DUE_DATE}?"
         ),
         (
-            f"Will Wikipedia show {player} with a FIDE ranking on {RESOLUTION_DATE} that matches "
-            f"or exceeds their ranking on {FORECAST_DUE_DATE}?"
+            f"Will Wikipedia show {player} with a FIDE rank position on {RESOLUTION_DATE} that "
+            f"is equal to or better than their rank position on {FORECAST_DUE_DATE}?"
         ),
         (
-            f"By Wikipedia's record, does {player}'s FIDE ranking on {RESOLUTION_DATE} stand as "
-            f"high or higher than the ranking recorded on {FORECAST_DUE_DATE}?"
+            f"By Wikipedia's record, is {player}'s FIDE rank position on {RESOLUTION_DATE} "
+            f"no worse than their rank position on {FORECAST_DUE_DATE}?"
         ),
     ]
 
@@ -427,6 +462,15 @@ def pattern_will_paraphrases(question: str) -> list[str] | None:
             ],
         ),
         (
+            r"^Will (.+) win second place in (.+)$",
+            lambda m: [
+                f"Will {m[1]} finish second in {m[2]}?",
+                f"Does {m[2]} end with {m[1]} in second place?",
+                f"Will second place in {m[2]} go to {m[1]}?",
+                f"Will {m[1]} be the second-place finisher in {m[2]}?",
+            ],
+        ),
+        (
             r"^Will (.+) win (.+)$",
             lambda m: [
                 f"Will {m[1]} come out on top in {m[2]}?",
@@ -504,7 +548,12 @@ def pattern_will_paraphrases(question: str) -> list[str] | None:
                 f"Will '{m[1]}' spend {m[2]} consecutive weeks at #1?",
                 f"Does '{m[1]}' hold the #1 spot for {m[2]} weeks in a row?",
                 f"Is '{m[1]}' number one for {m[2]} straight weeks?",
-                f"Will '{m[1]}' achieve a {m[2]}-week uninterrupted run at #1?",
+                (
+                    f"Will '{m[1]}' spend zero uninterrupted weeks at #1?"
+                    if m[2] == "0"
+                    else f"Will '{m[1]}' achieve {fixed_article_for_week_count(m[2])} "
+                    f"{m[2]}-week uninterrupted run at #1?"
+                ),
             ],
         ),
         (
@@ -602,7 +651,7 @@ def pattern_will_paraphrases(question: str) -> list[str] | None:
             lambda m: [
                 f"Will {m[1]} end up fifth in {m[2]}?",
                 f"Does {m[1]} finish in fifth place in {m[2]}?",
-                f"Is {m[1]} fifth in the final {m[2]} standings?",
+                f"Is {m[1]} fifth in the final {without_leading_the(m[2])} standings?",
                 f"Will fifth place in {m[2]} belong to {m[1]}?",
             ],
         ),
@@ -722,6 +771,54 @@ def paraphrase(question: str) -> tuple[list[str], str]:
     raise ValueError(f"No paraphrase rule for question: {question!r}")
 
 
+def postprocess_rendered_question(row: dict[str, Any], variant_index: int, question: str) -> str:
+    question = clarify_relative_year(row, question)
+
+    fide_original = re.match(
+        r"^According to Wikipedia, will (.+) have a FIDE ranking on (20\d{2}-\d{2}-\d{2}) "
+        r"as high or higher than their ranking on (20\d{2}-\d{2}-\d{2})\?$",
+        question,
+    )
+    if fide_original:
+        player, resolution_date, forecast_date = fide_original.groups()
+        return (
+            f"According to Wikipedia, will {player} have a lower-numbered or equal FIDE rank "
+            f"position on {resolution_date} than on {forecast_date}?"
+        )
+
+    if row.get("id") == "WGS10YR":
+        weekly_treasury_questions = {
+            0: (
+                "Will the weekly market yield on US Treasury securities at 10-year constant "
+                "maturity, quoted on an investment basis, have increased by 2025-12-14 as "
+                "compared to its value on 2025-11-27?"
+            ),
+            1: (
+                "As of 2025-12-14, will the weekly market yield on US Treasury securities at "
+                "10-year constant maturity, quoted on an investment basis, be higher than its "
+                "value on 2025-11-27?"
+            ),
+            2: (
+                "Will the weekly market yield on US Treasury securities at 10-year constant "
+                "maturity, quoted on an investment basis, show an increase from 2025-11-27 "
+                "to 2025-12-14?"
+            ),
+            3: (
+                "On 2025-12-14, is the weekly market yield on US Treasury securities at "
+                "10-year constant maturity, quoted on an investment basis, greater than it "
+                "was on 2025-11-27?"
+            ),
+            4: (
+                "Does the weekly market yield on US Treasury securities at 10-year constant "
+                "maturity, quoted on an investment basis, rise between 2025-11-27 and "
+                "2025-12-14?"
+            ),
+        }
+        return weekly_treasury_questions[variant_index]
+
+    return question.replace("Federal Reverse Banks", "Federal Reserve Banks")
+
+
 def read_rows(path: Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     with path.open(encoding="utf-8") as handle:
@@ -742,7 +839,11 @@ def build_records(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             raise ValueError(f"Duplicate variants for {row['id']}: {group!r}")
 
         for variant_index, text in enumerate(group):
-            rendered_question = clean(render_question_dates(text, row))
+            rendered_question = postprocess_rendered_question(
+                row,
+                variant_index,
+                clean(render_question_dates(text, row)),
+            )
             record = {
                 "source_question_index": group_index,
                 "id": row["id"],

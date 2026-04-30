@@ -45,7 +45,7 @@ def _load_simple_yaml(path: Path) -> dict[str, Any]:
     # Fallback parser for this repo's simple config shape when PyYAML is not installed.
     root: dict[str, Any] = {}
     current_section: dict[str, Any] | None = None
-    pending_list_key: str | None = None
+    pending_container_key: str | None = None
     for raw_line in path.read_text(encoding="utf-8").splitlines():
         if not raw_line.strip() or raw_line.lstrip().startswith("#"):
             continue
@@ -54,16 +54,26 @@ def _load_simple_yaml(path: Path) -> dict[str, Any]:
         if indent == 0 and line.endswith(":"):
             current_section = {}
             root[line[:-1]] = current_section
-            pending_list_key = None
+            pending_container_key = None
         elif indent == 2 and current_section is not None and line.endswith(":"):
-            pending_list_key = line[:-1]
-            current_section[pending_list_key] = []
+            pending_container_key = line[:-1]
+            current_section[pending_container_key] = {}
         elif indent == 2 and current_section is not None and ":" in line:
             key, value = line.split(":", 1)
             current_section[key.strip()] = _parse_scalar(value)
-            pending_list_key = None
-        elif indent == 4 and current_section is not None and pending_list_key and line.startswith("-"):
-            current_section[pending_list_key].append(_parse_scalar(line[1:]))
+            pending_container_key = None
+        elif indent == 4 and current_section is not None and pending_container_key and line.startswith("-"):
+            container = current_section[pending_container_key]
+            if not isinstance(container, list):
+                container = []
+                current_section[pending_container_key] = container
+            container.append(_parse_scalar(line[1:]))
+        elif indent == 4 and current_section is not None and pending_container_key and ":" in line:
+            container = current_section[pending_container_key]
+            if not isinstance(container, dict):
+                raise ValueError(f"Mixed list/mapping config values in {path}: {raw_line!r}")
+            key, value = line.split(":", 1)
+            container[key.strip()] = _parse_scalar(value)
         else:
             raise ValueError(f"Unsupported config line in {path}: {raw_line!r}")
     return root
@@ -162,6 +172,12 @@ def validate_training_layout(
         )
     if bool(train_cfg.get("shuffle_dataset", False)):
         raise ValueError("shuffle_dataset must stay false for grouped paraphrase rewards")
+    sampling_strategy = str(train_cfg.get("train_sampling_strategy", "sequential"))
+    if sampling_strategy not in {"sequential", "none"}:
+        raise ValueError(
+            "training.train_sampling_strategy must be sequential/none for grouped paraphrase rewards; "
+            f"got {sampling_strategy!r}"
+        )
     validate_contiguous_group_batches(splits["train"], prompt_batch_size, group_size)
     return group_size, train_batch_size, prompt_batch_size
 
@@ -179,6 +195,7 @@ def main() -> int:
             train_frac=float(data_cfg.get("train_frac", 0.8)),
             val_frac=float(data_cfg.get("val_frac", 0.1)),
             seed=int(data_cfg.get("seed", 17)),
+            stratify_by=str(data_cfg.get("stratify_by", "resolved_month")),
         ),
         expected_group_size=int(data_cfg.get("group_size", 5)),
     )
@@ -249,6 +266,9 @@ def main() -> int:
     grpo_kwargs = {
         "output_dir": train_cfg.get("output_dir", "outputs/grpo_forecastbench"),
         "learning_rate": float(train_cfg.get("learning_rate", 5e-6)),
+        "lr_scheduler_type": train_cfg.get("lr_scheduler_type", "linear"),
+        "warmup_ratio": float(train_cfg.get("warmup_ratio", 0.0)),
+        "max_grad_norm": float(train_cfg.get("max_grad_norm", 1.0)),
         "per_device_train_batch_size": int(train_cfg.get("per_device_train_batch_size", 5)),
         "per_device_eval_batch_size": int(train_cfg.get("per_device_eval_batch_size", num_generations)),
         "gradient_accumulation_steps": int(train_cfg.get("gradient_accumulation_steps", 1)),
@@ -262,20 +282,43 @@ def main() -> int:
         "top_k": int(train_cfg.get("top_k", 0)),
         "bf16": bool(train_cfg.get("bf16", False)),
         "tf32": bool(train_cfg.get("tf32", False)),
+        "gradient_checkpointing": bool(train_cfg.get("gradient_checkpointing", True)),
+        "use_cache": bool(train_cfg.get("use_cache", False)),
+        "seed": int(train_cfg.get("seed", data_cfg.get("seed", 17))),
+        "data_seed": int(train_cfg.get("data_seed", data_cfg.get("seed", 17))),
         "logging_steps": int(train_cfg.get("logging_steps", 5)),
+        "logging_first_step": bool(train_cfg.get("logging_first_step", True)),
+        "report_to": train_cfg.get("report_to", "none"),
+        "run_name": train_cfg.get("run_name"),
         "save_steps": int(train_cfg.get("save_steps", 100)),
+        "save_total_limit": int(train_cfg.get("save_total_limit", 2)),
         "eval_strategy": eval_strategy,
         "eval_steps": int(train_cfg.get("eval_steps", 50)),
         "dataloader_drop_last": True,
         "shuffle_dataset": bool(train_cfg.get("shuffle_dataset", False)),
+        "train_sampling_strategy": train_cfg.get("train_sampling_strategy", "sequential"),
         "scale_rewards": train_cfg.get("scale_rewards", "batch"),
         "loss_type": train_cfg.get("loss_type", "dapo"),
         "remove_unused_columns": False,
     }
+    for optional_key in (
+        "generation_batch_size",
+        "steps_per_generation",
+        "torch_empty_cache_steps",
+        "generation_kwargs",
+        "max_steps",
+    ):
+        if optional_key in train_cfg:
+            grpo_kwargs[optional_key] = train_cfg[optional_key]
     supported_args = set(inspect.signature(GRPOConfig).parameters)
     if "eval_strategy" not in supported_args and "evaluation_strategy" in supported_args:
         grpo_kwargs["evaluation_strategy"] = grpo_kwargs.pop("eval_strategy")
-    optional_args = {"max_prompt_length"}
+    optional_args = {
+        "max_prompt_length",
+        "train_sampling_strategy",
+        "use_cache",
+        "generation_kwargs",
+    }
     dropped_optional_args = sorted((set(grpo_kwargs) - supported_args) & optional_args)
     for key in dropped_optional_args:
         grpo_kwargs.pop(key)

@@ -37,6 +37,7 @@ class SplitConfig:
     train_frac: float = 0.8
     val_frac: float = 0.1
     seed: int = 17
+    stratify_by: str = "resolved_month"
 
     @property
     def test_frac(self) -> float:
@@ -93,21 +94,96 @@ def group_paraphrases(rows: list[dict[str, Any]], expected_group_size: int = 5) 
     return dict(groups)
 
 
-def split_group_ids(group_ids: list[str], config: SplitConfig) -> dict[str, set[str]]:
+def _allocate_counts(bucket_sizes: dict[str, int], target_total: int) -> dict[str, int]:
+    total = sum(bucket_sizes.values())
+    if total == 0:
+        return {key: 0 for key in bucket_sizes}
+
+    raw_counts = {
+        key: size * target_total / total
+        for key, size in bucket_sizes.items()
+    }
+    counts = {key: int(raw_counts[key]) for key in bucket_sizes}
+    remaining = target_total - sum(counts.values())
+    remainders = sorted(
+        bucket_sizes,
+        key=lambda key: (raw_counts[key] - counts[key], bucket_sizes[key], key),
+        reverse=True,
+    )
+    for key in remainders:
+        if remaining <= 0:
+            break
+        if counts[key] < bucket_sizes[key]:
+            counts[key] += 1
+            remaining -= 1
+    return counts
+
+
+def _stratification_key(items: list[dict[str, Any]], stratify_by: str) -> str:
+    first = items[0]
+    if stratify_by == "resolved_month":
+        resolved_at = parse_datetime(first.get("resolved_at"))
+        if resolved_at is None:
+            raise ValueError(f"Group {first.get('id')!r} has invalid resolved_at for stratification")
+        return resolved_at.strftime("%Y-%m")
+    if stratify_by == "resolved_date":
+        resolved_at = parse_datetime(first.get("resolved_at"))
+        if resolved_at is None:
+            raise ValueError(f"Group {first.get('id')!r} has invalid resolved_at for stratification")
+        return resolved_at.strftime("%Y-%m-%d")
+    if stratify_by == "none":
+        return "all"
+    raise ValueError(f"Unsupported split stratification: {stratify_by!r}")
+
+
+def split_group_ids(
+    group_ids: list[str],
+    config: SplitConfig,
+    groups: dict[str, list[dict[str, Any]]] | None = None,
+) -> dict[str, set[str]]:
     if not (0.0 < config.train_frac < 1.0 and 0.0 <= config.val_frac < 1.0):
         raise ValueError("invalid split fractions")
     if config.test_frac < 0.0:
         raise ValueError("train_frac + val_frac must be <= 1")
 
-    shuffled = list(group_ids)
-    random.Random(config.seed).shuffle(shuffled)
-    n = len(shuffled)
+    n = len(group_ids)
     n_train = int(round(n * config.train_frac))
     n_val = int(round(n * config.val_frac))
-    train = shuffled[:n_train]
-    val = shuffled[n_train : n_train + n_val]
-    test = shuffled[n_train + n_val :]
-    return {"train": set(train), "validation": set(val), "test": set(test)}
+    n_test = n - n_train - n_val
+
+    if groups is None or config.stratify_by == "none":
+        shuffled = list(group_ids)
+        random.Random(config.seed).shuffle(shuffled)
+        train = shuffled[:n_train]
+        val = shuffled[n_train : n_train + n_val]
+        test = shuffled[n_train + n_val :]
+        return {"train": set(train), "validation": set(val), "test": set(test)}
+
+    buckets: dict[str, list[str]] = defaultdict(list)
+    for gid in group_ids:
+        buckets[_stratification_key(groups[gid], config.stratify_by)].append(gid)
+    for key, ids in buckets.items():
+        ids.sort()
+        random.Random(f"{config.seed}:{key}").shuffle(ids)
+
+    bucket_sizes = {key: len(ids) for key, ids in buckets.items()}
+    train_counts = _allocate_counts(bucket_sizes, n_train)
+    remaining_sizes = {key: bucket_sizes[key] - train_counts[key] for key in buckets}
+    val_counts = _allocate_counts(remaining_sizes, n_val)
+
+    split_ids: dict[str, set[str]] = {"train": set(), "validation": set(), "test": set()}
+    for key, ids in buckets.items():
+        train_end = train_counts[key]
+        val_end = train_end + val_counts[key]
+        split_ids["train"].update(ids[:train_end])
+        split_ids["validation"].update(ids[train_end:val_end])
+        split_ids["test"].update(ids[val_end:])
+
+    actual = {name: len(ids) for name, ids in split_ids.items()}
+    expected = {"train": n_train, "validation": n_val, "test": n_test}
+    if actual != expected:
+        raise RuntimeError(f"Stratified split produced {actual}, expected {expected}")
+    return split_ids
 
 
 def make_prompt_row(row: dict[str, Any]) -> dict[str, Any]:
@@ -167,7 +243,7 @@ def load_grouped_prompt_splits(
 ) -> dict[str, list[dict[str, Any]]]:
     cfg = split_config or SplitConfig()
     groups = group_paraphrases(read_jsonl(paraphrase_path), expected_group_size=expected_group_size)
-    split_ids = split_group_ids(sorted(groups), cfg)
+    split_ids = split_group_ids(sorted(groups), cfg, groups)
 
     splits: dict[str, list[dict[str, Any]]] = {"train": [], "validation": [], "test": []}
     for split_name, ids in split_ids.items():

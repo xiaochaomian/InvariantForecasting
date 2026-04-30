@@ -1,0 +1,58 @@
+data:
+  paraphrase_path: data/paraphrased/forecastbench_current_after_2025-08-31_5x.jsonl
+  group_size: 5
+  train_frac: 0.8
+  val_frac: 0.1
+  seed: 17
+  stratify_by: resolved_month
+
+model:
+  name: Qwen/Qwen2.5-7B-Instruct
+  lora_r: 32
+  lora_alpha: 64
+  lora_dropout: 0.05
+  target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+
+training:
+  output_dir: outputs/grpo_forecastbench_qwen7b_lambda1
+  lambda_invariance: 1.0
+  parse_fail_reward: -1.0
+  learning_rate: 0.000001
+  lr_scheduler_type: linear
+  warmup_ratio: 0.03
+  max_grad_norm: 0.3
+  beta: 0.1
+  bf16: true
+  tf32: true
+  gradient_checkpointing: true
+  use_cache: false
+  seed: 17
+  data_seed: 17
+  per_device_train_batch_size: 25
+  gradient_accumulation_steps: 1
+  num_generations: 5
+  num_train_epochs: 1
+  max_prompt_length: 1024
+  max_completion_length: 48
+  logging_steps: 5
+  logging_first_step: true
+  report_to: none
+  run_name: grpo_forecastbench_qwen7b_lambda1
+  save_steps: 100
+  save_total_limit: 2
+  eval_strategy: "no"
+  eval_steps: 50
+  shuffle_dataset: false
+  train_sampling_strategy: sequential
+  scale_rewards: batch
+  loss_type: dapo
+  temperature: 0.7
+  top_p: 0.95
+  top_k: 50
+  generation_kwargs:
+    renormalize_logits: true
+    remove_invalid_values: true

@@ -4,6 +4,7 @@ data:
   train_frac: 0.8
   val_frac: 0.1
   seed: 17
+  stratify_by: resolved_month
 
 model:
   name: Qwen/Qwen2.5-7B-Instruct
@@ -23,9 +24,16 @@ training:
   # Conservative settings: prior runs with 5e-6 reached invalid sampling
   # probabilities during GRPO generation on H100.
   learning_rate: 0.000001
+  lr_scheduler_type: linear
+  warmup_ratio: 0.03
+  max_grad_norm: 0.3
   beta: 0.1
   bf16: true
   tf32: true
+  gradient_checkpointing: true
+  use_cache: false
+  seed: 17
+  data_seed: 17
   # TRL GRPO batch size is completion-level. With num_generations=5, this
   # yields 5 unique prompts per generation batch, i.e. one full paraphrase group.
   per_device_train_batch_size: 25
@@ -36,12 +44,20 @@ training:
   # Forecast is required on the first generated line; keep training generations short.
   max_completion_length: 48
   logging_steps: 5
+  logging_first_step: true
+  report_to: none
+  run_name: grpo_forecastbench_qwen7b_lambda1
   save_steps: 100
+  save_total_limit: 2
   eval_strategy: "no"
   eval_steps: 50
   shuffle_dataset: false
+  train_sampling_strategy: sequential
   scale_rewards: batch
   loss_type: dapo
   temperature: 0.7
   top_p: 0.95
   top_k: 50
+  generation_kwargs:
+    renormalize_logits: true
+    remove_invalid_values: true
