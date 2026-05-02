@@ -1,6 +1,48 @@
 .env
+.env.*
 .venv/
+venv/
 __pycache__/
 *.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+.DS_Store
+
+# Editable-install / packaging artifacts
+*.egg-info/
+build/
+dist/
+
+# Cached API payloads (re-runnable, don't bloat git)
+data/raw/forecastbench.jsonl
+data/raw/forecastbench_current/
+data/raw/metaculus.jsonl
+data/raw/metaculus_smoke.jsonl
+data/raw/metaculus_detail_sample.json
+data/raw/metaculus_cache/
+data/raw/polymarket.jsonl
+data/raw/polymarket_cache/
+data/raw/manifold.jsonl
+data/raw/manifold_cache/
+data/raw/mantic_q2_aib.jsonl
+data/contexts/
+data/paraphrased/
+data/processed/
+data/cache/
+
+# Backups created by drop_templated_outputs.py
+*.bak
+
+# Local snapshots (created by `tar -czf backups/...`)
+backups/
+
+# Training outputs
 outputs/
 results/
+logs/
+
+# Reports artifacts
+reports/*.aux
+reports/*.log
+reports/*.out

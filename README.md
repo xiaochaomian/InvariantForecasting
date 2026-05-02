@@ -1,200 +1,174 @@
-# InvariantForecasting
+# InvariantForecasting (v2)
 
-Frame-invariant RL post-training for binary LLM forecasting.
+Frame-invariant RL post-training for LLM forecasting on **gpt-oss-120b via
+Tinker**, targeting the ICML 2026 Forecasting workshop. This repo is a clean
+rewrite; the v1 pilot (Qwen2.5-7B + rule-based paraphrases) is in git history.
 
-This repo is set up for the current ForecastBench pilot:
+## Status
 
-- Base model: `Qwen/Qwen2.5-7B-Instruct`
-- Data: ForecastBench/current questions resolved after `2025-08-31`
-- Paraphrases: 5 variants per question, deterministic rule-based pack
-- Splits: 80/10/10 by question group, stratified by resolution month
-- Main runs: base eval, GRPO `lambda_invariance=0`, GRPO `lambda_invariance=1`
+Day 1 (data pulling) and Day 2 (context + paraphrasing + assembly) —
+✅ complete. Day 3 (Tinker training) next.
 
-The full project briefing in `reference/briefing.html` describes the paper-target
-protocol: Metaculus scale data, `K=8`, API paraphrasers, NLI filtering, and held-out
-paraphraser evaluation. This repo now implements the smaller, reproducible
-ForecastBench pilot. Do not describe it as the full paper protocol until those
-data/paraphraser pieces are added.
+| Stage | Module | Status |
+|---|---|---|
+| Unified question schema | `frame_invariance.data.schema` | ✅ |
+| ForecastBench puller (offline, with date rendering and combo filter) | `frame_invariance.data.forecastbench` | ✅ |
+| Metaculus / Polymarket / Manifold pullers (deferred) | `frame_invariance.data.{metaculus,polymarket,manifold}` | ✅ written, not run |
+| Mantic Q2 2025 AIB test set | `frame_invariance.data.mantic_aib` | ✅ |
+| Unifier + cross-source dedupe + audit | `frame_invariance.data.unify` | ✅ |
+| Claude client wrapper (cache + retry + backoff) | `frame_invariance.llm.client` | ✅ |
+| Context generator (base-rate + dated news, leakage filter) | `frame_invariance.data.context` | ✅ |
+| Claude paraphraser (K=8 with entity-preservation guard) | `frame_invariance.data.paraphrase_llm` | ✅ |
+| Build training set assembler | `frame_invariance.data.build_training_set` | ✅ |
+| Tinker GRPO trainer | `frame_invariance.training.train_tinker` | ⏳ Day 3 |
+| Eval (Brier + BCC headline, ParaSD appendix) | `frame_invariance.eval.*` | ⏳ Day 4 |
 
-## Data
+**Tests: 85/85 passing** across schema, ForecastBench puller (offline), Metaculus/Polymarket/Manifold pullers, unifier, Claude client, context generator, paraphraser, training-set assembler.
 
-Fetch ForecastBench/current rows:
+## Dataset summary (current run)
 
-```bash
-PYTHONPATH=src python3 scripts/fetch_forecastbench_current.py \
-  --since 2025-08-31 \
-  --max-questions 2000
-```
+- **3,471 unified post-cutoff binary questions** from ForecastBench's in-tree
+  snapshots (datasets/), all freezes and resolutions strictly after gpt-oss-120b's
+  June 2024 cutoff.
+- **17,240 training rows** = 3,448 question groups × K=5 (1 original + 4
+  paraphrases, with 23 questions dropped for incomplete groups or missing context).
+- **Splits:** 2,760 train / 343 validation / 345 test, stratified by
+  resolution month, deterministic seed 17.
+- **Yes-rate:** 0.229 train / 0.216 validation / 0.197 test.
+- **Source mix (FB sub-source):** ACLED 1,196 · Polymarket 868 · yfinance 485 ·
+  Wikipedia 338 · Manifold 176 · FRED 165 · Metaculus 132 · DBnomics 53 · INFER 35.
 
-Generate the 5x paraphrase pack:
+Day 2 cost: ~$135 in Anthropic Sonnet 4.6 calls (context generation + LLM
+paraphrasing + retries on entity-guard rejections).
 
-```bash
-PYTHONPATH=src python3 scripts/make_forecastbench_paraphrases.py
-```
-
-Outputs:
-
-- `data/raw/forecastbench_current_after_2025-08-31.jsonl`
-- `data/processed/forecastbench_current_after_2025-08-31.csv`
-- `data/paraphrased/forecastbench_current_after_2025-08-31_5x.jsonl`
-- `data/processed/forecastbench_current_after_2025-08-31_5x_paraphrases.csv`
-- `human/questions_and_paraphrases.txt`
-
-Before spending GPU time, run:
-
-```bash
-PYTHONPATH=src python3 scripts/audit_forecastbench.py
-PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_*.py'
-```
-
-Expected current audit shape:
-
-- 598 groups / 2,990 rows
-- Train: 478 groups
-- Validation: 60 groups
-- Test: 60 groups
-- Forecast dates: `2025-10-16` to `2025-11-27`
-- Resolution dates: `2025-10-27` to `2025-12-31`
-
-The audit uses a conservative `2024-06-30` model-cutoff guard. All forecast and
-resolution dates are after that, so the current questions are post-cutoff for Qwen2.5
-under that guard.
-
-## RunPod Setup
+## Install
 
 ```bash
-cd /workspace
-git clone https://github.com/xiaochaomian/InvariantForecasting.git
-cd InvariantForecasting
-
 python3 -m venv .venv
 source .venv/bin/activate
-pip install --upgrade pip
 pip install -e .
-
-mkdir -p logs
-PYTHONPATH=src python3 scripts/audit_forecastbench.py
-PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_*.py'
 ```
 
-## Base Eval
+## Day 1 — Pull every data source
+
+The four pullers all emit the same ``Question`` schema (see
+``src/frame_invariance/data/schema.py``). Run them in any order; they're
+independent.
 
 ```bash
-PYTHONPATH=src python -m frame_invariance.training.evaluate \
-  --config configs/training/grpo_forecastbench_lambda1.yaml \
-  --model Qwen/Qwen2.5-7B-Instruct \
-  --run-name base_qwen7b_clean \
-  --split test \
-  --batch-size 4 \
-  2>&1 | tee logs/base_qwen7b_clean_$(date +%Y%m%d_%H%M%S).log
+# 1. ForecastBench — uses the in-tree datasets/ snapshots (no network needed).
+PYTHONPATH=src python -m frame_invariance.data.forecastbench
+
+# 2. Metaculus — full pull (post-cutoff, resolved binary). Needs internet.
+PYTHONPATH=src python -m frame_invariance.data.metaculus
+
+# 3. Polymarket — Gamma API (post-cutoff, resolved binary, volume >= $1k).
+PYTHONPATH=src python -m frame_invariance.data.polymarket
+
+# 4. Manifold — public API (post-cutoff, resolved binary, volume >= M$100).
+PYTHONPATH=src python -m frame_invariance.data.manifold
+
+# 5. Mantic Q2 2025 AIB test split — pull via Metaculus tournament slug.
+PYTHONPATH=src python -m frame_invariance.data.mantic_aib tournament \
+    --slug aibq2 --output data/raw/mantic_q2_aib.jsonl
+# OR, if you find Mantic's published id list and drop it at data/raw/mantic_aib_ids.txt:
+PYTHONPATH=src python -m frame_invariance.data.mantic_aib drop-in \
+    --drop-in data/raw/mantic_aib_ids.txt \
+    --metaculus-jsonl data/raw/metaculus.jsonl
+
+# 6. Unify, cross-source dedupe, audit.
+PYTHONPATH=src python -m frame_invariance.data.unify \
+    --inputs data/raw/forecastbench.jsonl \
+             data/raw/metaculus.jsonl \
+             data/raw/polymarket.jsonl \
+             data/raw/manifold.jsonl \
+             data/raw/mantic_q2_aib.jsonl \
+    --output data/processed/unified.jsonl \
+    --audit-output data/processed/unified_audit.json
 ```
 
-This writes `results/base_qwen7b_clean/test/{summary.json,group_metrics.csv,variant_predictions.csv}`.
+Caches under ``data/raw/<source>_cache/`` are gitignored and re-runnable. The
+unifier re-runs in seconds; the API-backed pullers take 5–30 minutes each
+depending on rate-limit luck.
 
-## Mantic-Style Safe GRPO
+### Current ForecastBench-only baseline
 
-The recommended GRPO configs for new experiments are:
+After step 1 alone (offline, no APIs hit):
 
-- `configs/training/grpo_forecastbench_mantic_lambda0.yaml`
-- `configs/training/grpo_forecastbench_mantic_lambda1.yaml`
+| Source (within FB) | Count |
+|---|---:|
+| ACLED | 2,002 |
+| Polymarket | 1,592 |
+| Yahoo Finance | 1,269 |
+| Wikipedia | 969 |
+| FRED | 943 |
+| DBnomics | 590 |
+| Manifold | 496 |
+| Metaculus | 356 |
+| INFER | 112 |
+| **Total** | **8,329** |
 
-These keep the same Brier / frame-invariance reward but use safer optimization:
+Date range: 2024-07-12 → 2026-05-31. Yes-rate: 0.184. All post-cutoff for
+gpt-oss-120b (cutoff 2024-06-30 per OpenAI model card).
 
-- `scale_rewards: none`, matching the "do not divide by reward standard deviation" lesson from Mantic-style GRPO
-- `learning_rate: 2e-7`, `beta: 0.3`, `max_grad_norm: 0.05`
-- short checkpoint cadence: `save_steps: 5`, `max_steps: 30`
-- `parse_fail_reward: -2.0`
-- live safety guards that abort training before saving a collapsed state if parse rate drops, gradient norm becomes non-finite, or repeated punctuation loops appear
-
-`frac_reward_zero_std` is logged but is not a hard stop by default. It can be
-high on small grouped batches even when parse rate is perfect and gradients are
-finite, so hard-stopping on that metric alone creates false positives.
-
-Run lambda=1 first:
+### Tests
 
 ```bash
-PYTHONPATH=src python -m frame_invariance.training.train_grpo \
-  --config configs/training/grpo_forecastbench_mantic_lambda1.yaml \
-  --preflight
-
-PYTHONPATH=src python -m frame_invariance.training.train_grpo \
-  --config configs/training/grpo_forecastbench_mantic_lambda1.yaml \
-  2>&1 | tee logs/grpo_mantic_lambda1_$(date +%Y%m%d_%H%M%S).log
+python -m pytest tests/ -v
 ```
 
-Evaluate all saved checkpoints and choose by validation FRIE before test reporting:
+65 tests covering schema, four pullers, unifier, Claude client, context
+generator, and paraphraser; all passing.
+
+## Day 2 — Generate context and paraphrases
+
+These two steps both call Claude Sonnet 4.6 via the Anthropic API. Set
+`ANTHROPIC_API_KEY` first.
 
 ```bash
-for STEP in 5 10 15 20 25 30; do
-  PYTHONPATH=src python -m frame_invariance.training.evaluate \
-    --config configs/training/grpo_forecastbench_mantic_lambda1.yaml \
-    --model outputs/grpo_forecastbench_qwen7b_mantic_lambda1/checkpoint-$STEP \
-    --base-model Qwen/Qwen2.5-7B-Instruct \
-    --run-name grpo_mantic_lambda1_ckpt$STEP \
-    --split validation \
-    --batch-size 4 \
-    2>&1 | tee logs/eval_grpo_mantic_lambda1_ckpt${STEP}_validation_$(date +%Y%m%d_%H%M%S).log
-done
+export ANTHROPIC_API_KEY=<your-key>
+
+# Smoke test on 5 questions first (fast, cheap, surfaces prompt issues early).
+PYTHONPATH=src python -m frame_invariance.data.context \
+    --input data/processed/unified.jsonl \
+    --output data/processed/contexts_smoke.jsonl \
+    --limit 5
+
+PYTHONPATH=src python -m frame_invariance.data.paraphrase_llm \
+    --input data/processed/unified.jsonl \
+    --output data/processed/paraphrases_smoke.jsonl \
+    --limit 5
 ```
 
-If training stops with `GRPO safety stop`, do not use the stopped state. Use the
-most recent earlier checkpoint and inspect the log around the stop.
-
-## GRPO Lambda 0
+Inspect the smoke outputs (especially the `news_snapshot` dates, which must
+all be strictly before each question's `freeze_date`, and the paraphrases,
+which must all preserve entities). If they look right:
 
 ```bash
-PYTHONPATH=src python -m frame_invariance.training.train_grpo \
-  --config configs/training/grpo_forecastbench_lambda0.yaml \
-  --preflight
+# Full run on 8,329 questions. ~$200 in Claude API; both runs cached on disk
+# under data/cache/claude/, so re-runs are free.
+PYTHONPATH=src python -m frame_invariance.data.context \
+    --input data/processed/unified.jsonl \
+    --output data/processed/contexts.jsonl \
+    --max-workers 8
 
-PYTHONPATH=src python -m frame_invariance.training.train_grpo \
-  --config configs/training/grpo_forecastbench_lambda0.yaml \
-  2>&1 | tee logs/grpo_lambda0_$(date +%Y%m%d_%H%M%S).log
-
-PYTHONPATH=src python -m frame_invariance.training.evaluate \
-  --config configs/training/grpo_forecastbench_lambda0.yaml \
-  --model outputs/grpo_forecastbench_qwen7b_lambda0 \
-  --base-model Qwen/Qwen2.5-7B-Instruct \
-  --run-name grpo_lambda0 \
-  --split test \
-  --batch-size 4 \
-  2>&1 | tee logs/eval_grpo_lambda0_$(date +%Y%m%d_%H%M%S).log
+PYTHONPATH=src python -m frame_invariance.data.paraphrase_llm \
+    --input data/processed/unified.jsonl \
+    --output data/processed/paraphrases.jsonl \
+    --max-workers 8 --k 8
 ```
 
-## GRPO Lambda 1
+Resume support: re-running with the same `--output` skips question ids that
+already have a row written. The Claude content cache is content-addressed,
+so prompts that haven't changed don't re-fire even if you change unrelated
+flags.
 
-```bash
-PYTHONPATH=src python -m frame_invariance.training.train_grpo \
-  --config configs/training/grpo_forecastbench_lambda1.yaml \
-  --preflight
+## What survived the v2 cleanup
 
-PYTHONPATH=src python -m frame_invariance.training.train_grpo \
-  --config configs/training/grpo_forecastbench_lambda1.yaml \
-  2>&1 | tee logs/grpo_lambda1_$(date +%Y%m%d_%H%M%S).log
+`datasets/` (ForecastBench in-tree snapshots, 26 resolution sets and matching
+question sets) and `.git`. Everything else (code, configs, paraphrases,
+reports) is from the v1 pilot and is no longer referenced.
 
-PYTHONPATH=src python -m frame_invariance.training.evaluate \
-  --config configs/training/grpo_forecastbench_lambda1.yaml \
-  --model outputs/grpo_forecastbench_qwen7b_lambda1 \
-  --base-model Qwen/Qwen2.5-7B-Instruct \
-  --run-name grpo_lambda1 \
-  --split test \
-  --batch-size 4 \
-  2>&1 | tee logs/eval_grpo_lambda1_$(date +%Y%m%d_%H%M%S).log
-```
+## License
 
-## Metrics
-
-Each evaluation summary reports:
-
-- `mean_brier`: Brier on group consensus probability
-- `mean_parasd`: probability standard deviation across paraphrases
-- `mean_brier_base_rate` and `mean_brier_constant_0_5`: sanity baselines
-- `mean_brier_if_labels_inverted`: label-direction diagnostic
-- `mean_brier_variant`: per-variant Brier before consensus
-- `mean_log_loss` and `ece_10`: calibration hygiene
-- `frie_lambda_0`, `frie_lambda_1`, `frie_lambda_5`: combined frontier metrics
-- `variant_coverage` and `group_full_coverage`: parser coverage
-
-Use the base eval, lambda 0 eval, and lambda 1 eval summaries for the first clean
-comparison table. The old exploratory first-run artifacts were removed because they
-were generated before the prompt/date/paraphrase fixes.
+MIT. See `LICENSE`.
