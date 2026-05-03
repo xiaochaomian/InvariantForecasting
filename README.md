@@ -6,8 +6,9 @@ rewrite; the v1 pilot (Qwen2.5-7B + rule-based paraphrases) is in git history.
 
 ## Status
 
-Day 1 (data pulling) and Day 2 (context + paraphrasing + assembly) —
-✅ complete. Day 3 (Tinker training) next.
+Day 1 (data pulling), Day 2 (context + paraphrasing + assembly), and the
+offline evaluation/training harness are implemented. Tinker GRPO is ready for
+a tiny remote smoke test before any scaled run.
 
 | Stage | Module | Status |
 |---|---|---|
@@ -20,10 +21,12 @@ Day 1 (data pulling) and Day 2 (context + paraphrasing + assembly) —
 | Context generator (base-rate + dated news, leakage filter) | `frame_invariance.data.context` | ✅ |
 | Claude paraphraser (K=8 with entity-preservation guard) | `frame_invariance.data.paraphrase_llm` | ✅ |
 | Build training set assembler | `frame_invariance.data.build_training_set` | ✅ |
-| Tinker GRPO trainer | `frame_invariance.training.train_tinker` | ⏳ Day 3 |
-| Eval (Brier + BCC headline, ParaSD appendix) | `frame_invariance.eval.*` | ⏳ Day 4 |
+| Tinker GRPO trainer | `frame_invariance.training.train_tinker` | ✅ implemented, remote smoke pending |
+| Eval (Brier + BCC headline, ParaSD appendix) | `frame_invariance.eval.*` | ✅ baseline + coherence benchmark |
 
-**Tests: 85/85 passing** across schema, ForecastBench puller (offline), Metaculus/Polymarket/Manifold pullers, unifier, Claude client, context generator, paraphraser, training-set assembler.
+Core offline tests cover schema, ForecastBench puller, API pullers, unifier,
+Claude client, context generation, paraphrasing, training-set assembly,
+baseline evaluation, coherence diagnostics, and GRPO reward helpers.
 
 ## Dataset summary (current run)
 
@@ -162,6 +165,191 @@ Resume support: re-running with the same `--output` skips question ids that
 already have a row written. The Claude content cache is content-addressed,
 so prompts that haven't changed don't re-fire even if you change unrelated
 flags.
+
+## Baseline evaluation
+
+Before any RL run, generate a frozen no-posttraining baseline on the assembled
+dataset. This establishes the Brier / log-loss / paraphrase-sensitivity numbers
+that Tinker GRPO has to beat.
+
+First assemble the grouped dataset if it is not already present:
+
+```bash
+PYTHONPATH=src python -m frame_invariance.data.build_training_set \
+    --unified data/processed/unified.jsonl \
+    --contexts data/processed/contexts.jsonl \
+    --paraphrases data/processed/paraphrases.jsonl \
+    --output data/processed/training.jsonl \
+    --audit-output data/processed/training_audit.json \
+    --k 5
+```
+
+Run the cheap sanity baselines first:
+
+```bash
+PYTHONPATH=src python -m frame_invariance.eval.baseline \
+    --input data/processed/training.jsonl \
+    --split validation \
+    --run-name baseline_constant_05_validation \
+    --mode constant \
+    --constant-prob 0.5
+
+PYTHONPATH=src python -m frame_invariance.eval.baseline \
+    --input data/processed/training.jsonl \
+    --split validation \
+    --run-name baseline_context_base_rate_validation \
+    --mode context-base-rate
+```
+
+Then run a small model smoke test. For GPT-OSS-120B, prefer Tinker sampling over
+local vLLM if serving is unstable. Tinker reads `TINKER_API_KEY` and handles the
+remote GPU worker.
+
+```bash
+export TINKER_API_KEY=<your-tinker-key>
+
+PYTHONPATH=src python -m frame_invariance.eval.baseline \
+    --input data/processed/training.jsonl \
+    --split validation \
+    --run-name base_gpt_oss_120b_tinker_smoke \
+    --mode tinker \
+    --model openai/gpt-oss-120b \
+    --limit-groups 5 \
+    --max-workers 1 \
+    --temperature 0 \
+    --max-tokens 1024
+```
+
+If the smoke run has `variant_coverage = 1.0`, run full validation and then
+test exactly once:
+
+```bash
+PYTHONPATH=src python -m frame_invariance.eval.baseline \
+    --input data/processed/training.jsonl \
+    --split validation \
+    --run-name base_gpt_oss_120b_tinker_validation \
+    --mode tinker \
+    --model openai/gpt-oss-120b \
+    --max-workers 1 \
+    --temperature 0 \
+    --max-tokens 1024
+
+PYTHONPATH=src python -m frame_invariance.eval.baseline \
+    --input data/processed/training.jsonl \
+    --split test \
+    --run-name base_gpt_oss_120b_tinker_test \
+    --mode tinker \
+    --model openai/gpt-oss-120b \
+    --max-workers 1 \
+    --temperature 0 \
+    --max-tokens 1024
+```
+
+The evaluator also supports OpenAI-compatible chat completions, so it works with
+the OpenAI SDK against either a hosted endpoint or a local/vLLM server via
+`OPENAI_BASE_URL`.
+
+```bash
+export OPENAI_API_KEY=<your-key-or-local-placeholder>
+# Optional for local/vLLM:
+# export OPENAI_BASE_URL=http://127.0.0.1:8000/v1
+
+PYTHONPATH=src python -m frame_invariance.eval.baseline \
+    --input data/processed/training.jsonl \
+    --split validation \
+    --run-name base_gpt_oss_120b_smoke \
+    --mode api \
+    --model gpt-oss-120b \
+    --limit-groups 5 \
+    --max-workers 4 \
+    --temperature 0 \
+    --max-tokens 256
+```
+
+If the OpenAI-compatible smoke run has `variant_coverage = 1.0`, run full
+validation and then test exactly once:
+
+```bash
+PYTHONPATH=src python -m frame_invariance.eval.baseline \
+    --input data/processed/training.jsonl \
+    --split validation \
+    --run-name base_gpt_oss_120b_validation \
+    --mode api \
+    --model gpt-oss-120b \
+    --max-workers 4 \
+    --temperature 0 \
+    --max-tokens 256
+
+PYTHONPATH=src python -m frame_invariance.eval.baseline \
+    --input data/processed/training.jsonl \
+    --split test \
+    --run-name base_gpt_oss_120b_test \
+    --mode api \
+    --model gpt-oss-120b \
+    --max-workers 4 \
+    --temperature 0 \
+    --max-tokens 256
+```
+
+Each run writes `variant_predictions.csv`, `group_metrics.csv`, and
+`summary.json` under `results/<run-name>/<split>/`. The headline fields are
+`mean_brier`, `mean_log_loss`, `mean_parasd`, `frie_lambda_1`, and coverage.
+
+### Bayesian-coherence benchmark
+
+After a model baseline finishes, run the offline Bayesian-coherence benchmark.
+It compares the model posterior to the supplied base-rate prior and reports
+whether the model improved Brier/log-loss over that prior, whether updates moved
+in the correct direction in hindsight, and how stable log-odds updates were
+across paraphrases.
+
+```bash
+PYTHONPATH=src python -m frame_invariance.eval.coherence \
+    --training data/processed/training.jsonl \
+    --predictions results/base_gpt_oss_120b_tinker_validation/validation/variant_predictions.csv
+```
+
+This writes `coherence/summary.json` and `coherence/group_coherence.csv` next
+to the prediction file. Treat this as a diagnostic benchmark, not as a
+replacement for Brier/log-loss or ParaSD.
+
+## Tinker GRPO training
+
+The Tinker trainer is in `frame_invariance.training.train_tinker`. It implements
+a conservative grouped GRPO-style loop:
+
+- sample one completion for each paraphrase variant in a question group;
+- reward each completion with `-(Brier + lambda * paraphrase_variance_penalty)`;
+- normalize rewards within the paraphrase group as GRPO advantages;
+- train sampled tokens through Tinker's PPO loss;
+- stop early on low parse rate, punctuation loops, or all-zero reward variance.
+
+Always preflight first:
+
+```bash
+PYTHONPATH=src python -m frame_invariance.training.train_tinker \
+    --config configs/training/tinker_grpo_lambda0.yaml \
+    --preflight
+```
+
+Then run only the tiny lambda=0 smoke config:
+
+```bash
+PYTHONPATH=src python -m frame_invariance.training.train_tinker \
+    --config configs/training/tinker_grpo_lambda0.yaml
+```
+
+If lambda=0 parses cleanly and writes a checkpoint, run the lambda=1 smoke:
+
+```bash
+PYTHONPATH=src python -m frame_invariance.training.train_tinker \
+    --config configs/training/tinker_grpo_lambda1.yaml
+```
+
+Do not scale `max_steps` or `groups_per_step` until the smoke run metrics show
+high `reward_parse_rate`, zero `reward_punctuation_loop_rate`, and no safety
+stop. Checkpoints are saved as Tinker sampler weights and recorded in
+`results/<run-name>/train/checkpoints.jsonl`.
 
 ## What survived the v2 cleanup
 

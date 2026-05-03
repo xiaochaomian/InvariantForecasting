@@ -1,0 +1,44 @@
+training:
+  input_path: data/processed/training.jsonl
+  output_dir: outputs/tinker_grpo_lambda0
+  results_dir: results
+  run_name: tinker_grpo_lambda0
+  base_model: openai/gpt-oss-120b
+  split: train
+  seed: 17
+
+  # Tiny-first defaults. Increase only after preflight + smoke metrics look sane.
+  max_steps: 5
+  groups_per_step: 1
+  save_every: 5
+  eval_every: 0
+
+  lora_rank: 16
+  train_mlp: true
+  train_attn: true
+  train_unembed: false
+
+  learning_rate: 2.0e-7
+  beta1: 0.9
+  beta2: 0.95
+  weight_decay: 0.0
+  grad_clip_norm: 0.05
+
+  max_tokens: 512
+  temperature: 0.7
+  top_p: 0.95
+
+  # lambda=0: forecast-quality reward only.
+  lambda_invariance: 0.0
+  parse_fail_reward: -2.0
+  punctuation_loop_reward: -2.0
+  advantage_clip: 5.0
+  # Tinker expects PPO epsilon thresholds, not absolute ratio bounds.
+  ppo_clip_low: 0.2
+  ppo_clip_high: 0.2
+
+  safety_min_parse_rate: 0.8
+  safety_max_punctuation_loop_rate: 0.05
+  safety_max_zero_std_frac: 0.95
+  safety_start_step: 2
+  tinker_api_key_env: TINKER_API_KEY

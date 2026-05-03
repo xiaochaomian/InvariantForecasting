@@ -28,7 +28,11 @@ data/raw/manifold_cache/
 data/raw/mantic_q2_aib.jsonl
 data/contexts/
 data/paraphrased/
-data/processed/
+data/processed/*
+!data/processed/
+!data/processed/unified.jsonl
+!data/processed/contexts.jsonl
+!data/processed/paraphrases.jsonl
 data/cache/
 
 # Backups created by drop_templated_outputs.py
