@@ -69,12 +69,15 @@ class TrainConfig:
     lambda_invariance: float
     parse_fail_reward: float
     punctuation_loop_reward: float
+    advantage_scale: float
     advantage_clip: float
     ppo_clip_low: float
     ppo_clip_high: float
     safety_min_parse_rate: float
     safety_max_punctuation_loop_rate: float
     safety_max_zero_std_frac: float
+    safety_max_ppo_kl: float | None
+    safety_max_ppo_clip_frac: float | None
     safety_start_step: int
     tinker_api_key_env: str
 
@@ -157,7 +160,12 @@ class TinkerTrainer:
             top_p=self.config.top_p,
             seed=seed,
         )
-        result = self.sampling_client.sample(prompt, 1, params).result()
+        result = self.sampling_client.sample(
+            prompt,
+            1,
+            params,
+            include_prompt_logprobs=True,
+        ).result()
         sequence = result.sequences[0]
         completion_tokens = list(sequence.tokens)
         if sequence.logprobs is None:
@@ -165,10 +173,17 @@ class TinkerTrainer:
         completion_logprobs = list(sequence.logprobs)
         if len(completion_logprobs) != len(completion_tokens):
             raise RuntimeError("Tinker sampling returned misaligned tokens/logprobs")
+        raw_prompt_logprobs = getattr(result, "prompt_logprobs", None)
+        if raw_prompt_logprobs is None:
+            raise RuntimeError("Tinker sampling did not return prompt logprobs required for PPO")
+        prompt_logprobs = [0.0 if x is None else float(x) for x in raw_prompt_logprobs]
+        if len(prompt_logprobs) != len(prompt_tokens):
+            raise RuntimeError("Tinker sampling returned misaligned prompt tokens/logprobs")
         completion = decode_tokens(self.tokenizer, completion_tokens)
         return {
             "row": row,
             "prompt_tokens": prompt_tokens,
+            "prompt_logprobs": prompt_logprobs,
             "completion_tokens": completion_tokens,
             "completion_logprobs": completion_logprobs,
             "completion": completion,
@@ -177,6 +192,7 @@ class TinkerTrainer:
 
     def make_datum(self, sample: dict[str, Any], advantage: float) -> Any:
         prompt_tokens = sample["prompt_tokens"]
+        prompt_logprobs = sample["prompt_logprobs"]
         completion_tokens = sample["completion_tokens"]
         completion_logprobs = sample["completion_logprobs"]
         if not completion_tokens:
@@ -194,7 +210,9 @@ class TinkerTrainer:
         target_tokens = full_tokens[1:]
         n_prompt_targets = max(0, len(prompt_tokens) - 1)
         n_completion = len(completion_tokens)
-        old_logprobs = [0.0] * n_prompt_targets + [float(x) for x in completion_logprobs]
+        old_logprobs = [float(x) for x in prompt_logprobs[1:]] + [
+            float(x) for x in completion_logprobs
+        ]
         per_token_adv = advantage / max(1, n_completion)
         advantages = [0.0] * n_prompt_targets + [float(per_token_adv)] * n_completion
         if len(target_tokens) != len(old_logprobs) or len(target_tokens) != len(advantages):
@@ -248,6 +266,7 @@ class TinkerTrainer:
                 [r.reward for r in reward_results],
                 clip=self.config.advantage_clip,
             )
+            advantages = [a * self.config.advantage_scale for a in advantages]
             all_group_rewards.append(reward_results)
             zero_std_flags.append(zero_std)
             for sample, result, advantage in zip(samples, reward_results, advantages):
@@ -337,11 +356,20 @@ def load_config(path: Path) -> TrainConfig:
         parse_fail_reward=float(t.get("parse_fail_reward", -2.0)),
         punctuation_loop_reward=float(t.get("punctuation_loop_reward", -2.0)),
         advantage_clip=float(t.get("advantage_clip", 5.0)),
+        advantage_scale=float(t.get("advantage_scale", 1.0)),
         ppo_clip_low=float(t.get("ppo_clip_low", 0.2)),
         ppo_clip_high=float(t.get("ppo_clip_high", 0.2)),
         safety_min_parse_rate=float(t.get("safety_min_parse_rate", 0.8)),
         safety_max_punctuation_loop_rate=float(t.get("safety_max_punctuation_loop_rate", 0.05)),
         safety_max_zero_std_frac=float(t.get("safety_max_zero_std_frac", 0.95)),
+        safety_max_ppo_kl=(
+            None if t.get("safety_max_ppo_kl") in {None, "none", "None"} else float(t["safety_max_ppo_kl"])
+        ),
+        safety_max_ppo_clip_frac=(
+            None
+            if t.get("safety_max_ppo_clip_frac") in {None, "none", "None"}
+            else float(t["safety_max_ppo_clip_frac"])
+        ),
         safety_start_step=int(t.get("safety_start_step", 2)),
         tinker_api_key_env=str(t.get("tinker_api_key_env", "TINKER_API_KEY")),
     )
@@ -411,7 +439,24 @@ def maybe_stop_for_safety(step: int, metrics: dict[str, Any], config: TrainConfi
             f"zero-std reward fraction {metrics.get('frac_reward_zero_std')} above "
             f"{config.safety_max_zero_std_frac}"
         )
+    loss_metrics = metrics.get("loss_metrics") or {}
+    if config.safety_max_ppo_kl is not None:
+        ppo_kl = _metric_float(loss_metrics, "ppo_kl_div:mean")
+        if ppo_kl is not None and ppo_kl > config.safety_max_ppo_kl:
+            return f"PPO KL {ppo_kl} above {config.safety_max_ppo_kl}"
+    if config.safety_max_ppo_clip_frac is not None:
+        clip_frac = _metric_float(loss_metrics, "ppo_clipped_fraction:mean")
+        if clip_frac is not None and clip_frac > config.safety_max_ppo_clip_frac:
+            return f"PPO clipped fraction {clip_frac} above {config.safety_max_ppo_clip_frac}"
     return None
+
+
+def _metric_float(metrics: dict[str, Any], key: str) -> float | None:
+    try:
+        value = float(metrics[key])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return value
 
 
 def train(config: TrainConfig) -> None:

@@ -32,6 +32,7 @@ training:
   lambda_invariance: 1.0
   parse_fail_reward: -2.0
   punctuation_loop_reward: -2.0
+  advantage_scale: 1.0
   advantage_clip: 5.0
   # Tinker expects PPO epsilon thresholds, not absolute ratio bounds.
   ppo_clip_low: 0.2
@@ -40,5 +41,7 @@ training:
   safety_min_parse_rate: 0.8
   safety_max_punctuation_loop_rate: 0.05
   safety_max_zero_std_frac: 0.95
+  safety_max_ppo_kl: none
+  safety_max_ppo_clip_frac: none
   safety_start_step: 2
   tinker_api_key_env: TINKER_API_KEY
