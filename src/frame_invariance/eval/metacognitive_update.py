@@ -2,10 +2,14 @@
 
 This evaluator asks two closely related questions for each forecast:
 
-1. Hypothetical: given the prior phase and a stated current forecast pi, what
-   posterior would the model expect to have if it received neutral evidence Y?
+1. Hypothetical: given the prior phase and a current forecast pi, what posterior
+   would the model expect to have if it received neutral evidence Y?
 2. Actual: in a fresh chat with the same prior phase, actually provide Y and
    ask for the posterior.
+
+By default pi is the dataset base-rate prior, preserving the original smoke
+test. With --elicited-prior, pi is first elicited from the model in the same
+context that is later used for the counterfactual update prediction.
 
 The resulting metric compares predicted vs actual log-odds shifts from pi. A
 good forecaster should not merely say "I would update" abstractly; its
@@ -57,6 +61,7 @@ class Config:
     results_dir: Path
     mode: str
     model: str
+    prior_source: str
     limit_groups: int | None
     max_workers: int
     max_tokens: int
@@ -89,7 +94,9 @@ def latest_valid_neutral_rewrites(path: Path) -> dict[str, dict[str, Any]]:
     return out
 
 
-def selected_original_rows(rows: list[dict[str, Any]], *, split: str, limit_groups: int | None) -> list[dict[str, Any]]:
+def selected_original_rows(
+    rows: list[dict[str, Any]], *, split: str, limit_groups: int | None
+) -> list[dict[str, Any]]:
     selected = [
         r
         for r in rows
@@ -101,7 +108,36 @@ def selected_original_rows(rows: list[dict[str, Any]], *, split: str, limit_grou
     return selected
 
 
-def hypothetical_messages(prior_prompt: str, prior_prob: float, update_text: str) -> list[dict[str, str]]:
+def prior_elicitation_prompt(prior_prompt: str) -> str:
+    marker = (
+        "Do not answer yet. Store this as the prior; the next message will "
+        "provide new dated evidence for the update phase."
+    )
+    replacement = "\n".join(
+        [
+            "Using only the prior phase above, give your current forecast now.",
+            "Put your forecast on the first line exactly as:",
+            "Probability: <number between 0 and 1>",
+            "Then add a short rationale.",
+        ]
+    )
+    if marker in prior_prompt:
+        return prior_prompt.replace(marker, replacement)
+    return "\n".join([prior_prompt.rstrip(), "", replacement])
+
+
+def prior_messages(prior_prompt: str) -> list[dict[str, str]]:
+    return normalize_messages(
+        [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": prior_elicitation_prompt(prior_prompt)},
+        ]
+    )
+
+
+def hypothetical_messages(
+    prior_prompt: str, prior_prob: float, update_text: str
+) -> list[dict[str, str]]:
     return normalize_messages(
         [
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -131,12 +167,64 @@ def hypothetical_messages(prior_prompt: str, prior_prob: float, update_text: str
     )
 
 
-def actual_messages(prior_prompt: str, base_rate: dict[str, Any], update_text: str) -> list[dict[str, str]]:
+def hypothetical_messages_after_elicited_prior(
+    prior_prompt: str,
+    prior_completion: str,
+    prior_prob: float,
+    update_text: str,
+) -> list[dict[str, str]]:
+    return normalize_messages(
+        [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": prior_elicitation_prompt(prior_prompt)},
+            {"role": "assistant", "content": prior_completion},
+            {
+                "role": "user",
+                "content": "\n".join(
+                    [
+                        "Metacognitive update prediction",
+                        "",
+                        f"Your current forecast is P(X) = {prior_prob:.3f}.",
+                        "You are about to receive the following new information in a "
+                        "separate ordinary forecast.",
+                        "",
+                        "New information:",
+                        update_text.strip(),
+                        "",
+                        "Before making that ordinary forecast, predict what your own posterior",
+                        "forecast would be after incorporating this information.",
+                        "Put that predicted posterior on the first line exactly as:",
+                        "Probability: <number between 0 and 1>",
+                        "Then add a short rationale.",
+                    ]
+                ),
+            },
+        ]
+    )
+
+
+def actual_messages(
+    prior_prompt: str, base_rate: dict[str, Any], update_text: str
+) -> list[dict[str, str]]:
     return normalize_messages(
         [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": prior_prompt},
             {"role": "assistant", "content": prior_assistant_message(base_rate)},
+            {"role": "user", "content": render_update_prompt(update_text)},
+        ]
+    )
+
+
+def actual_messages_fresh(prior_prompt: str, update_text: str) -> list[dict[str, str]]:
+    return normalize_messages(
+        [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": prior_prompt},
+            {
+                "role": "assistant",
+                "content": "Understood. I will use the prior phase as the starting point.",
+            },
             {"role": "user", "content": render_update_prompt(update_text)},
         ]
     )
@@ -199,6 +287,7 @@ def evaluate(config: Config) -> tuple[dict[str, Any], Path, Path]:
             prior_prob = math.nan
         if q is None or rewrite is None or not math.isfinite(prior_prob):
             continue
+        stated_prior_prob = prior_prob
         update_text = str(rewrite["update_text"])
         prior_prompt = render_prior_prompt(
             str(row.get("question") or q.question),
@@ -210,24 +299,57 @@ def evaluate(config: Config) -> tuple[dict[str, Any], Path, Path]:
             base_rate=base_rate,
         )
 
-        hyp_completion = predictor.complete(
-            hypothetical_messages(prior_prompt, prior_prob, update_text)
-        )
-        act_completion = predictor.complete(
-            actual_messages(prior_prompt, base_rate, update_text)
-        )
+        prior_completion = ""
+        if config.prior_source == "elicited":
+            prior_completion = predictor.complete(prior_messages(prior_prompt))
+            parsed_prior = parse_probability(prior_completion)
+            if parsed_prior is None:
+                out_rows.append(
+                    {
+                        "id": qid,
+                        "split": config.split,
+                        "outcome": int(row["outcome"]),
+                        "prior_source": config.prior_source,
+                        "stated_prior_prob": stated_prior_prob,
+                        "prior_prob": None,
+                        "prior_parseable": False,
+                        "hypothetical_parseable": False,
+                        "actual_parseable": False,
+                        "question": row.get("question", ""),
+                        "prior_completion": prior_completion,
+                        "hypothetical_completion": "",
+                        "actual_completion": "",
+                    }
+                )
+                print(f"metacognitive update {idx}/{len(training_rows)}", flush=True)
+                continue
+            prior_prob = float(parsed_prior)
+            hyp_messages = hypothetical_messages_after_elicited_prior(
+                prior_prompt, prior_completion, prior_prob, update_text
+            )
+            act_messages = actual_messages_fresh(prior_prompt, update_text)
+        else:
+            hyp_messages = hypothetical_messages(prior_prompt, prior_prob, update_text)
+            act_messages = actual_messages(prior_prompt, base_rate, update_text)
+
+        hyp_completion = predictor.complete(hyp_messages)
+        act_completion = predictor.complete(act_messages)
         hyp_prob = parse_probability(hyp_completion)
         act_prob = parse_probability(act_completion)
         row_out: dict[str, Any] = {
             "id": qid,
             "split": config.split,
             "outcome": int(row["outcome"]),
+            "prior_source": config.prior_source,
+            "stated_prior_prob": stated_prior_prob,
             "prior_prob": prior_prob,
+            "prior_parseable": True,
             "hypothetical_prob": hyp_prob,
             "actual_prob": act_prob,
             "hypothetical_parseable": hyp_prob is not None,
             "actual_parseable": act_prob is not None,
             "question": row.get("question", ""),
+            "prior_completion": prior_completion,
             "hypothetical_completion": hyp_completion,
             "actual_completion": act_completion,
         }
@@ -250,14 +372,21 @@ def evaluate(config: Config) -> tuple[dict[str, Any], Path, Path]:
 
     write_csv(rows_path, out_rows)
     parseable = [
-        r for r in out_rows if r.get("hypothetical_parseable") and r.get("actual_parseable")
+        r
+        for r in out_rows
+        if r.get("prior_parseable")
+        and r.get("hypothetical_parseable")
+        and r.get("actual_parseable")
     ]
+    metric_bundle = summarize_prediction_quality(parseable)
     summary = {
         "run_name": config.run_name,
         "split": config.split,
         "mode": config.mode,
         "model": config.model,
+        "prior_source": config.prior_source,
         "n_groups": len(out_rows),
+        "n_prior_parseable": sum(1 for r in out_rows if r.get("prior_parseable")),
         "n_parseable_pairs": len(parseable),
         "pair_coverage": len(parseable) / len(out_rows) if out_rows else 0.0,
         "mean_abs_logodds_shift_error": mean(
@@ -276,6 +405,7 @@ def evaluate(config: Config) -> tuple[dict[str, Any], Path, Path]:
         "hypothetical_shift_gt_0_05_frac": frac(
             r.get("hypothetical_abs_logodds_shift", 0.0) > 0.05 for r in parseable
         ),
+        **metric_bundle,
         "elapsed_s": round(time.time() - started, 3),
         "limit_groups": config.limit_groups,
         "neutral_only": True,
@@ -291,6 +421,108 @@ def mean(values: Any) -> float | None:
     return sum(vals) / len(vals)
 
 
+def rmse(values: Any) -> float | None:
+    vals = [float(v) for v in values if v is not None and math.isfinite(float(v))]
+    if not vals:
+        return None
+    return math.sqrt(sum(v * v for v in vals) / len(vals))
+
+
+def pearson(xs: Any, ys: Any) -> float | None:
+    xvals = [float(x) for x in xs if x is not None and math.isfinite(float(x))]
+    yvals = [float(y) for y in ys if y is not None and math.isfinite(float(y))]
+    if len(xvals) != len(yvals) or len(xvals) < 2:
+        return None
+    xmean = sum(xvals) / len(xvals)
+    ymean = sum(yvals) / len(yvals)
+    xvar = sum((x - xmean) ** 2 for x in xvals)
+    yvar = sum((y - ymean) ** 2 for y in yvals)
+    if xvar <= 0.0 or yvar <= 0.0:
+        return None
+    cov = sum((x - xmean) * (y - ymean) for x, y in zip(xvals, yvals))
+    return cov / math.sqrt(xvar * yvar)
+
+
+def rankdata(values: list[float]) -> list[float]:
+    indexed = sorted(enumerate(values), key=lambda item: item[1])
+    ranks = [0.0] * len(values)
+    i = 0
+    while i < len(indexed):
+        j = i + 1
+        while j < len(indexed) and indexed[j][1] == indexed[i][1]:
+            j += 1
+        # Average 1-indexed ranks for ties, matching scipy.stats.rankdata.
+        rank = (i + 1 + j) / 2.0
+        for original_index, _ in indexed[i:j]:
+            ranks[original_index] = rank
+        i = j
+    return ranks
+
+
+def spearman(xs: Any, ys: Any) -> float | None:
+    xvals = [float(x) for x in xs if x is not None and math.isfinite(float(x))]
+    yvals = [float(y) for y in ys if y is not None and math.isfinite(float(y))]
+    if len(xvals) != len(yvals) or len(xvals) < 2:
+        return None
+    return pearson(rankdata(xvals), rankdata(yvals))
+
+
+def summarize_prediction_quality(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    hyp_shifts = [float(r["hypothetical_logodds_shift"]) for r in rows]
+    act_shifts = [float(r["actual_logodds_shift"]) for r in rows]
+    shift_errors = [h - a for h, a in zip(hyp_shifts, act_shifts)]
+    posterior_errors = [float(r["hypothetical_prob"]) - float(r["actual_prob"]) for r in rows]
+    no_update_errors = [-a for a in act_shifts]
+    mean_actual_shift = mean(act_shifts)
+    if mean_actual_shift is None:
+        constant_shift_errors: list[float] = []
+    else:
+        constant_shift_errors = [float(mean_actual_shift) - a for a in act_shifts]
+    shift_mae = mean(abs(e) for e in shift_errors)
+    no_update_mae = mean(abs(e) for e in no_update_errors)
+    return {
+        "logodds_shift_corr": pearson(hyp_shifts, act_shifts),
+        "logodds_shift_spearman": spearman(hyp_shifts, act_shifts),
+        "logodds_shift_rmse": rmse(shift_errors),
+        "posterior_gap_rmse": rmse(posterior_errors),
+        "no_update_logodds_shift_mae": no_update_mae,
+        "no_update_logodds_shift_rmse": rmse(no_update_errors),
+        "constant_shift_logodds_shift_mae": mean(abs(e) for e in constant_shift_errors),
+        "constant_shift_logodds_shift_rmse": rmse(constant_shift_errors),
+        "mean_actual_logodds_shift": mean_actual_shift,
+        "mean_hypothetical_logodds_shift": mean(hyp_shifts),
+        "logodds_mae_improvement_vs_no_update": (
+            1.0 - float(shift_mae) / float(no_update_mae)
+            if shift_mae is not None and no_update_mae not in (None, 0.0)
+            else None
+        ),
+        "worst_abs_logodds_shift_errors": worst_shift_errors(rows, limit=10),
+    }
+
+
+def worst_shift_errors(rows: list[dict[str, Any]], *, limit: int) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    sorted_rows = sorted(
+        rows,
+        key=lambda r: float(r.get("abs_logodds_shift_error") or 0.0),
+        reverse=True,
+    )
+    for row in sorted_rows[:limit]:
+        out.append(
+            {
+                "id": row.get("id"),
+                "prior_prob": row.get("prior_prob"),
+                "hypothetical_prob": row.get("hypothetical_prob"),
+                "actual_prob": row.get("actual_prob"),
+                "hypothetical_logodds_shift": row.get("hypothetical_logodds_shift"),
+                "actual_logodds_shift": row.get("actual_logodds_shift"),
+                "abs_logodds_shift_error": row.get("abs_logodds_shift_error"),
+                "question": row.get("question"),
+            }
+        )
+    return out
+
+
 def frac(values: Any) -> float | None:
     vals = [bool(v) for v in values]
     if not vals:
@@ -303,7 +535,10 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         "id",
         "split",
         "outcome",
+        "prior_source",
+        "stated_prior_prob",
         "prior_prob",
+        "prior_parseable",
         "hypothetical_prob",
         "actual_prob",
         "hypothetical_parseable",
@@ -316,6 +551,7 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         "actual_abs_logodds_shift",
         "hypothetical_abs_logodds_shift",
         "question",
+        "prior_completion",
         "hypothetical_completion",
         "actual_completion",
     ]
@@ -335,6 +571,17 @@ def parse_args(argv: list[str] | None = None) -> Config:
     parser.add_argument("--results-dir", default=DEFAULT_RESULTS_DIR)
     parser.add_argument("--mode", choices=("api", "tinker"), default="tinker")
     parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument(
+        "--prior-source",
+        choices=("stated", "elicited"),
+        default="stated",
+        help="Use dataset base-rate pi, or first elicit pi from the model.",
+    )
+    parser.add_argument(
+        "--elicited-prior",
+        action="store_true",
+        help="Shortcut for --prior-source elicited.",
+    )
     parser.add_argument("--limit-groups", type=int, default=5)
     parser.add_argument("--max-workers", type=int, default=1)
     parser.add_argument("--max-tokens", type=int, default=512)
@@ -347,6 +594,7 @@ def parse_args(argv: list[str] | None = None) -> Config:
     parser.add_argument("--tinker-api-key-env", default="TINKER_API_KEY")
     parser.add_argument("--tinker-base-model", default=DEFAULT_TINKER_BASE_MODEL)
     args = parser.parse_args(argv)
+    prior_source = "elicited" if args.elicited_prior else args.prior_source
     return Config(
         training=Path(args.training),
         unified=Path(args.unified),
@@ -356,6 +604,7 @@ def parse_args(argv: list[str] | None = None) -> Config:
         results_dir=Path(args.results_dir),
         mode=args.mode,
         model=args.model,
+        prior_source=prior_source,
         limit_groups=args.limit_groups,
         max_workers=max(1, args.max_workers),
         max_tokens=args.max_tokens,
