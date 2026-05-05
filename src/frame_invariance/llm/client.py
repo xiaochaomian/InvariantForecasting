@@ -25,6 +25,7 @@ import hashlib
 import json
 import os
 import random
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -39,6 +40,7 @@ DEFAULT_BACKOFF_S = 2.0
 DEFAULT_BACKOFF_MAX_S = 60.0
 ENV_API_KEY = "ANTHROPIC_API_KEY"
 MESSAGES_ENDPOINT = "https://api.anthropic.com/v1/messages"
+API_KEY_PATTERN = re.compile(r"sk-ant-api03-[A-Za-z0-9_-]+")
 
 
 @dataclass(frozen=True)
@@ -122,7 +124,8 @@ class ClaudeClient:
         backoff_max_s: float = DEFAULT_BACKOFF_MAX_S,
         timeout_s: int = DEFAULT_TIMEOUT_S,
     ) -> None:
-        self._api_key = api_key or os.environ.get(ENV_API_KEY)
+        raw_api_key = api_key or os.environ.get(ENV_API_KEY)
+        self._api_key = raw_api_key.strip() if raw_api_key else None
         self._cache_dir = Path(cache_dir) if cache_dir else None
         if self._cache_dir is not None:
             self._cache_dir.mkdir(parents=True, exist_ok=True)
@@ -281,6 +284,13 @@ class ClaudeClient:
                 # SDK exceptions are heterogeneous; treat them as retryable
                 # unless the message clearly indicates a 4xx other than 429.
                 msg = str(e)
+                if self._sdk_client is not None and "connection error" in msg.lower():
+                    # The SDK/httpx sometimes collapses useful network details
+                    # into "Connection error."; fall back to the REST transport
+                    # so callers either proceed or see a more specific URLError.
+                    self._sdk_client = None
+                    last_exc = e
+                    continue
                 if "429" in msg or "rate" in msg.lower() or "5" in msg[:3]:
                     last_exc = e
                     if attempt >= self._max_retries:
@@ -291,11 +301,15 @@ class ClaudeClient:
                     )
                     time.sleep(sleep)
                 else:
-                    raise ClaudeError(str(e)) from e
+                    raise ClaudeError(_redact_secret(str(e))) from e
         raise ClaudeError(
-            f"max retries ({self._max_retries}) exceeded; last error: {last_exc}"
+            f"max retries ({self._max_retries}) exceeded; last error: {_redact_secret(str(last_exc))}"
         )
 
 
 class _RetryableError(RuntimeError):
     pass
+
+
+def _redact_secret(text: str) -> str:
+    return API_KEY_PATTERN.sub("sk-ant-api03-[REDACTED]", text)

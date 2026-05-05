@@ -140,7 +140,7 @@ PYTHONPATH=src python -m frame_invariance.data.context \
 PYTHONPATH=src python -m frame_invariance.data.paraphrase_llm \
     --input data/processed/unified.jsonl \
     --output data/processed/paraphrases_smoke.jsonl \
-    --limit 5
+    --limit 5 
 ```
 
 Inspect the smoke outputs (especially the `news_snapshot` dates, which must
@@ -312,6 +312,65 @@ PYTHONPATH=src python -m frame_invariance.eval.coherence \
 This writes `coherence/summary.json` and `coherence/group_coherence.csv` next
 to the prediction file. Treat this as a diagnostic benchmark, not as a
 replacement for Brier/log-loss or ParaSD.
+
+## V2.5 prior/update dataset
+
+The V2.5 dataset separates forecasting into a prior phase and an update phase.
+It keeps the original question paraphrases from `training.jsonl`, then combines
+each question paraphrase with five strongly framed evidence-update rewrites:
+neutral, weak-yes, strong-yes, weak-no, and strong-no. This directly tests
+whether models are sensitive to rhetorical evidence framing.
+
+Export prompts for an external rewrite model:
+
+```bash
+PYTHONPATH=src python -m frame_invariance.data.update_rewrites_llm \
+    --mode export-prompts \
+    --unified data/processed/unified.jsonl \
+    --contexts data/processed/contexts.jsonl \
+    --prompt-output data/processed/update_rewrite_prompts.jsonl
+```
+
+If using Claude directly, generate the rewrite file:
+
+```bash
+export ANTHROPIC_API_KEY=<your-key>
+
+PYTHONPATH=src python -m frame_invariance.data.update_rewrites_llm \
+    --mode generate \
+    --unified data/processed/unified.jsonl \
+    --contexts data/processed/contexts.jsonl \
+    --output data/processed/update_rewrites_strong.jsonl \
+    --max-workers 4
+```
+
+If another LLM creates `data/processed/update_rewrites_strong.jsonl`, validate
+it before assembly:
+
+```bash
+PYTHONPATH=src python -m frame_invariance.data.update_rewrites_llm \
+    --mode validate \
+    --unified data/processed/unified.jsonl \
+    --contexts data/processed/contexts.jsonl \
+    --output data/processed/update_rewrites_strong.jsonl
+```
+
+Build the V2.5 training file:
+
+```bash
+PYTHONPATH=src python -m frame_invariance.data.build_training_v2_5 \
+    --training data/processed/training.jsonl \
+    --unified data/processed/unified.jsonl \
+    --rewrites data/processed/update_rewrites_strong.jsonl \
+    --output data/processed/training_v2_5.jsonl \
+    --audit-output data/processed/training_v2_5_audit.json \
+    --question-variants all
+```
+
+Run V2.5 baselines by passing `--input data/processed/training_v2_5.jsonl` to the
+same evaluator. Run V2.5 Tinker smoke tests with
+`configs/training/tinker_grpo_v2_5_lambda0.yaml` and
+`configs/training/tinker_grpo_v2_5_lambda1.yaml`.
 
 ## Tinker GRPO training
 

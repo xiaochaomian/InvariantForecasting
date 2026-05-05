@@ -33,6 +33,9 @@ data/processed/*
 !data/processed/unified.jsonl
 !data/processed/contexts.jsonl
 !data/processed/paraphrases.jsonl
+!data/processed/update_rewrites_strong.jsonl
+!data/processed/training_v2_5.jsonl
+!data/processed/training_v2_5_audit.json
 data/cache/
 
 # Backups created by drop_templated_outputs.py
