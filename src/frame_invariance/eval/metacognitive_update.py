@@ -467,7 +467,7 @@ def spearman(xs: Any, ys: Any) -> float | None:
     return pearson(rankdata(xvals), rankdata(yvals))
 
 
-def summarize_prediction_quality(rows: list[dict[str, Any]]) -> dict[str, Any]:
+def summarize_prediction_quality_core(rows: list[dict[str, Any]]) -> dict[str, Any]:
     hyp_shifts = [float(r["hypothetical_logodds_shift"]) for r in rows]
     act_shifts = [float(r["actual_logodds_shift"]) for r in rows]
     shift_errors = [h - a for h, a in zip(hyp_shifts, act_shifts)]
@@ -496,8 +496,90 @@ def summarize_prediction_quality(rows: list[dict[str, Any]]) -> dict[str, Any]:
             if shift_mae is not None and no_update_mae not in (None, 0.0)
             else None
         ),
+    }
+
+
+def summarize_prediction_quality(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    exact_extreme_filtered = [
+        row
+        for row in rows
+        if not has_exact_zero_or_one(row, fields=("hypothetical_prob", "actual_prob"))
+    ]
+    non_extreme_shift_filtered = [
+        row for row in rows if abs(float(row["actual_logodds_shift"])) < 5.0
+    ]
+    return {
+        **summarize_prediction_quality_core(rows),
+        "n_excluding_exact_0_1_posteriors": len(exact_extreme_filtered),
+        "metrics_excluding_exact_0_1_posteriors": summarize_prediction_quality_core(
+            exact_extreme_filtered
+        ),
+        "n_abs_actual_shift_lt_5": len(non_extreme_shift_filtered),
+        "metrics_abs_actual_shift_lt_5": summarize_prediction_quality_core(
+            non_extreme_shift_filtered
+        ),
+        "actual_shift_extremity_bins": summarize_extremity_bins(rows),
         "worst_abs_logodds_shift_errors": worst_shift_errors(rows, limit=10),
     }
+
+
+def has_exact_zero_or_one(row: dict[str, Any], *, fields: tuple[str, ...]) -> bool:
+    for field in fields:
+        try:
+            value = float(row[field])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if value in (0.0, 1.0):
+            return True
+    return False
+
+
+def summarize_extremity_bins(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    bins = [
+        ("abs_actual_shift_lt_1", 0.0, 1.0),
+        ("abs_actual_shift_1_to_3", 1.0, 3.0),
+        ("abs_actual_shift_3_to_5", 3.0, 5.0),
+        ("abs_actual_shift_gte_5", 5.0, math.inf),
+    ]
+    out: list[dict[str, Any]] = []
+    for label, lo, hi in bins:
+        subset = [
+            row
+            for row in rows
+            if lo <= abs(float(row["actual_logodds_shift"])) < hi
+        ]
+        metrics = summarize_prediction_quality_core(subset)
+        out.append(
+            {
+                "bin": label,
+                "min_abs_actual_logodds_shift": lo,
+                "max_abs_actual_logodds_shift": None if math.isinf(hi) else hi,
+                "n": len(subset),
+                "n_exact_0_1_posteriors": sum(
+                    1
+                    for row in subset
+                    if has_exact_zero_or_one(
+                        row, fields=("hypothetical_prob", "actual_prob")
+                    )
+                ),
+                "pearson": metrics["logodds_shift_corr"],
+                "spearman": metrics["logodds_shift_spearman"],
+                "mae": mean(abs(float(row["logodds_shift_error"])) for row in subset),
+                "rmse": metrics["logodds_shift_rmse"],
+                "posterior_mae": mean(
+                    abs(float(row["hypothetical_prob"]) - float(row["actual_prob"]))
+                    for row in subset
+                ),
+                "posterior_rmse": metrics["posterior_gap_rmse"],
+                "mean_actual_abs_shift": mean(
+                    abs(float(row["actual_logodds_shift"])) for row in subset
+                ),
+                "mean_hypothetical_abs_shift": mean(
+                    abs(float(row["hypothetical_logodds_shift"])) for row in subset
+                ),
+            }
+        )
+    return out
 
 
 def worst_shift_errors(rows: list[dict[str, Any]], *, limit: int) -> list[dict[str, Any]]:

@@ -1,0 +1,362 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage{hyperref}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!55!black,
+  citecolor=blue!55!black,
+  urlcolor=blue!55!black
+}
+
+\newcommand{\logit}{\operatorname{logit}}
+\newcommand{\pred}{\mathrm{pred}}
+\newcommand{\act}{\mathrm{act}}
+
+\title{Can Language Models Forecast Their Own Belief Updates?\\
+\large A Two-Context Test of Metacognitive Forecast Revision}
+\author{Invariant Forecasting Project}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Probabilistic forecasts are useful only insofar as they can be revised under
+new evidence. Recent work studies whether language models can forecast future
+events, whether they update beliefs in a Bayes-like manner, and whether they
+can predict aspects of their own future behavior. We connect these threads with
+a direct metacognitive test: can a language model predict how its own forecast
+will change after seeing evidence? For each forecasting question $X$ and
+neutral evidence packet $Y$, we first elicit the model's current probability
+$\pi=P(X)$. In the same context, before allowing an ordinary update, we ask the
+model to predict what its own posterior would be after receiving $Y$. In a
+fresh context, we then actually provide $Y$ and elicit the realized posterior.
+We compare predicted and realized updates in log-odds space. On a 200-question
+ForecastBench-derived validation set using GPT-OSS-120B, the model's predicted
+and realized log-odds updates have Spearman correlation $0.835$ and reduce
+mean absolute log-odds error by $58.0\%$ relative to a no-update baseline.
+After removing exact $0/1$ parsed posteriors, Pearson correlation rises from
+$0.664$ to $0.899$ and Spearman correlation remains high at $0.855$. Error
+analysis shows that failures concentrate in a small number of extreme posterior
+shifts, while ordinary-sized updates remain strongly predictable. These results
+suggest that language models exhibit measurable self-forecasting of their own
+evidence-conditioned forecast revisions, without implying Bayes optimality or
+privileged access to internal beliefs.
+\end{abstract}
+
+\section{Introduction}
+
+Forecasting systems should not merely issue probabilities; they should also
+revise them coherently when new information arrives. Large language models
+(LLMs) are increasingly evaluated as forecasters on real-world questions
+\cite{halawi2024forecasting,karger2024forecastbench}. Separately, a growing
+literature asks whether LLMs can evaluate their own knowledge or anticipate
+their own behavior \cite{kadavath2022know,ashok2025behavior,binder2024inward},
+and another asks whether LLMs can perform probabilistic or Bayesian-style
+belief updating \cite{qiu2026bayesian}. What is missing is the direct bridge:
+can a model predict its own future belief update before the evidence is
+actually shown in an ordinary forecasting context?
+
+We propose a simple two-context protocol. Given a binary question $X$, first
+elicit the model's current forecast $\pi$. Then, in the same context, present a
+counterfactual description of evidence $Y$ and ask the model to predict the
+posterior it would give after incorporating $Y$. Finally, in a fresh context,
+provide the same evidence $Y$ and elicit the model's actual posterior. The
+central object is not the posterior itself, but the update:
+\begin{align}
+  \Delta_{\pred} &= \logit(\pi'_{\pred}) - \logit(\pi),\\
+  \Delta_{\act} &= \logit(\pi'_{\act}) - \logit(\pi).
+\end{align}
+If models have metacognitive access to their own forecast revision behavior,
+then $\Delta_{\pred}$ should track $\Delta_{\act}$ across many $(X,Y)$ pairs.
+
+This paper reports an initial, deliberately narrow result: neutral evidence
+packets only, one model, and 200 validation questions. The result is nonetheless
+sharp. Predicted and actual updates are strongly rank-correlated, substantially
+closer than a no-update baseline, and robust after excluding exact boundary
+probabilities. The main failure mode is also interpretable: a small number of
+extreme actual shifts dominate RMSE and depress all-row Pearson correlation.
+
+\section{Protocol}
+
+Each example consists of a binary forecasting question $X$, a prior phase, and
+a neutral evidence packet $Y$ dated before the forecast date. The prior phase
+includes the question, source background, resolution criteria, forecast date,
+resolution date, and a reference-class base rate. The base rate is shown as
+context, but in the exact protocol it is not used as $\pi$; $\pi$ is elicited
+from the model.
+
+\paragraph{Step 1: elicit the current forecast.}
+The model receives only the prior phase and is asked to output a probability on
+the first line in the form \texttt{Probability: <number between 0 and 1>}. This
+probability is $\pi$.
+
+\paragraph{Step 2: predict the future update.}
+In the same conversation, the model is told that it is about to receive evidence
+$Y$ in a separate ordinary forecast. Before making that ordinary forecast, it is
+asked to predict what its own posterior forecast would become after
+incorporating $Y$. This yields $\pi'_{\pred}$.
+
+\paragraph{Step 3: realize the update in a fresh context.}
+In a new context, the model receives the same prior phase, acknowledges that it
+will use the prior phase as its starting point, then receives $Y$ as the update
+phase and outputs a posterior. This yields $\pi'_{\act}$.
+
+\paragraph{Metric.}
+We compare log-odds updates from the same elicited prior. To avoid infinite
+values, probabilities are clipped to $[10^{-6},1-10^{-6}]$ before applying
+$\logit(p)=\log(p/(1-p))$. We report Pearson and Spearman correlations between
+$\Delta_{\pred}$ and $\Delta_{\act}$, mean absolute error (MAE), RMSE, posterior
+probability gap, and improvement over a no-update baseline
+($\Delta_{\pred}=0$).
+
+\section{Data and Model}
+
+We evaluate on 200 validation questions from the repository's
+ForecastBench-derived dataset. The evidence packets are the neutral variants of
+the generated prior/update dataset; stronger weak-yes, strong-yes, weak-no, and
+strong-no framings are reserved for future experiments. We run GPT-OSS-120B via
+Tinker sampling at temperature $0$, top-$p=1$, and a 512-token generation cap.
+The run produced 199 parseable prior forecasts and 189 fully parseable
+prior/predicted/actual triples, giving pair coverage $94.5\%$.
+
+\section{Results}
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{lrrr}
+\toprule
+Metric & All rows & Excl. exact 0/1 & $|\Delta_{\act}|<5$ \\
+\midrule
+Parseable pairs / rows & 189 / 200 & 188 / 200 & 186 / 200 \\
+Pearson corr. & 0.664 & 0.899 & 0.876 \\
+Spearman corr. & 0.835 & 0.855 & 0.850 \\
+Log-odds MAE & 0.440 & 0.372 & 0.367 \\
+Log-odds RMSE & 1.080 & 0.503 & 0.491 \\
+Posterior RMSE & 0.044 & 0.037 & 0.037 \\
+No-update MAE & 1.048 & 0.987 & 0.942 \\
+MAE improvement vs no-update & 58.0\% & 62.3\% & 61.0\% \\
+\bottomrule
+\end{tabular}
+\caption{Main exact-protocol results. The model substantially predicts its own
+future update. Exact boundary probabilities primarily affect Pearson and RMSE
+through logit clipping, while rank correlation remains high.}
+\label{tab:main}
+\end{table}
+
+Table~\ref{tab:main} gives the main result. Across all parseable pairs,
+predicted and actual log-odds shifts have Spearman correlation $0.835$ and
+Pearson correlation $0.664$. The model reduces log-odds MAE by $58.0\%$
+relative to predicting no update. Removing exact $0/1$ posteriors leaves nearly
+the same number of examples but changes the magnitude-sensitive metrics
+substantially: Pearson rises to $0.899$ and RMSE falls to $0.503$. This confirms
+that a small number of boundary outputs dominate all-row squared error.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.72\linewidth]{figures/predicted_vs_actual_updates.pdf}
+\caption{Predicted versus actual log-odds updates in the exact two-context
+protocol. The dashed line is perfect self-prediction. The exact $0/1$ outlier
+is visible as a large negative actual shift.}
+\label{fig:scatter}
+\end{figure}
+
+Figure~\ref{fig:scatter} shows the same pattern visually. Most points cluster
+around the diagonal, while one exact-zero actual posterior produces an extreme
+negative update and drives a large portion of the all-row RMSE.
+
+\section{Distribution-Conditional Diagnostics}
+
+The 200-run suggests a distribution-conditional story: the model predicts
+ordinary updates well, while rare extreme updates are less stable. We therefore
+condition on $|\Delta_{\act}|$ bins.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{lrrrrrr}
+\toprule
+$|\Delta_{\act}|$ bin & $n$ & Pearson & Spearman & MAE & RMSE & Post. MAE \\
+\midrule
+$<1$ & 116 & 0.805 & 0.780 & 0.308 & 0.428 & 0.025 \\
+$[1,3)$ & 69 & 0.893 & 0.557 & 0.463 & 0.578 & 0.015 \\
+$[3,5)$ & 1 & -- & -- & 0.693 & 0.693 & 0.00005 \\
+$\geq5$ & 3 & 0.443 & 0.500 & 4.934 & 7.653 & 0.127 \\
+\bottomrule
+\end{tabular}
+\caption{Performance conditioned on actual update extremity. Most examples
+fall below $|\Delta_{\act}|<3$, where linear correlation and error remain
+strong. The extreme bin is tiny and contains the exact-zero outlier.}
+\label{tab:bins}
+\end{table}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.88\linewidth]{figures/extremity_bins.pdf}
+\caption{Correlations and error by actual-update extremity. The two-regime
+picture is visible: ordinary updates are predictable; rare extreme shifts are
+the main source of instability.}
+\label{fig:bins}
+\end{figure}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.78\linewidth]{figures/robustness_summary.pdf}
+\caption{Robustness of the headline metrics. Excluding exact boundary
+posteriors or restricting to $|\Delta_{\act}|<5$ recovers high Pearson
+correlation while preserving high Spearman correlation and large improvement
+over no-update.}
+\label{fig:robust}
+\end{figure}
+
+Table~\ref{tab:bins} and Figure~\ref{fig:bins} are the key diagnostic evidence.
+There are 185 parseable pairs with $|\Delta_{\act}|<3$. In these ordinary
+regimes, Pearson correlations are $0.805$ and $0.893$ in the first two bins,
+with log-odds MAE below $0.47$. The $\geq5$ bin contains only three examples and
+one exact-zero posterior; it is too small to support broad conclusions, but it
+explains why all-row Pearson and RMSE are more fragile than Spearman.
+
+\section{Worst-Case Examples}
+
+\begin{table}[t]
+\centering
+\scriptsize
+\begin{tabular}{p{0.43\linewidth}rrrrr}
+\toprule
+Question & $\pi$ & $\pi'_{\pred}$ & $\pi'_{\act}$ & $\Delta_{\pred}$ & $\Delta_{\act}$ \\
+\midrule
+Scottie Scheffler wins 2026 Masters & 0.220 & 0.340 & 0.000 & 0.602 & -12.550 \\
+Belichick coaches Chargers in 2024--25 & 0.001 & 0.0001 & 0.001 & -2.303 & 0.000 \\
+Solana reaches \$100 in March & 0.300 & 0.950 & 0.990 & 3.792 & 5.442 \\
+Kim Jong Un out as Supreme Leader in 2025 & 0.020 & 0.010 & 0.002 & -0.703 & -2.321 \\
+New Coronavirus pandemic in 2025 & 0.020 & 0.030 & 0.008 & 0.416 & -0.928 \\
+\bottomrule
+\end{tabular}
+\caption{Top worst-case examples by absolute log-odds shift error. Boundary and
+near-boundary probabilities create large log-odds effects even when probability
+differences are modest.}
+\label{tab:worst}
+\end{table}
+
+The worst cases are informative rather than merely embarrassing. The largest
+error is an exact $0.0$ actual posterior, which becomes a very large negative
+log-odds shift after clipping. Other large errors often involve very small
+prior or posterior probabilities. This suggests that future runs should report
+both log-odds-space metrics and probability-space metrics, and should audit
+whether exact boundary outputs reflect genuine model certainty, parsing
+artifacts, or prompt-induced formatting behavior.
+
+\section{Related Work}
+
+\paragraph{LLM forecasting.}
+Forecasting benchmarks evaluate whether LLMs can produce calibrated
+probabilities for future events. Halawi et al.\ show that retrieval-augmented
+LM systems can approach competitive human forecasting in some settings
+\cite{halawi2024forecasting}. ForecastBench provides a dynamic benchmark of
+future-event forecasts designed to reduce contamination risk
+\cite{karger2024forecastbench}. Our work is complementary: we do not primarily
+evaluate forecast accuracy, but whether a model can predict its own update when
+evidence is introduced.
+
+\paragraph{Self-knowledge and self-prediction.}
+Kadavath et al.\ study whether models can evaluate the correctness of their own
+answers and predict whether they know an answer \cite{kadavath2022know}. More
+recent work asks whether models can predict their own behavior or learn about
+themselves by introspection \cite{ashok2025behavior,binder2024inward}. We adopt
+the self-prediction lens but apply it to probabilistic forecast revision rather
+than task success, answer validity, or output behavior.
+
+\paragraph{Bayesian and probabilistic reasoning in LLMs.}
+Bayesian inference gives a normative account of belief revision under evidence.
+Recent work investigates how LLMs represent priors or learn probabilistic
+reasoning behavior \cite{zhu2024priors,qiu2026bayesian}. Our experiment is not
+a test of Bayes optimality. Instead, it asks whether the model's own
+counterfactual prediction of its posterior update matches the posterior update
+that actually appears under the same evidence in a fresh context.
+
+\section{Limitations and Next Steps}
+
+This is a workshop-scale draft result with several limitations. First, we
+evaluate one model and neutral evidence only. The same protocol should be run
+on smaller open models and on weakly/strongly biased evidence framings. Second,
+the exact protocol uses generated evidence packets and a particular prompt
+format; prompt sensitivity remains an open question. Third, log-odds metrics
+are appropriate for forecast revision but highly sensitive near 0 and 1. We
+therefore report robust subsets and probability-space gaps, but future work
+should pre-register clipping rules and boundary handling. Finally, a model's
+ability to predict its output under a prompt is not evidence of conscious
+self-knowledge. The claim is behavioral and operational: predicted update
+tracks realized update.
+
+\section{Conclusion}
+
+We introduced a two-context protocol for testing whether language models can
+forecast their own future belief updates. On 200 neutral ForecastBench-derived
+examples, GPT-OSS-120B predicts its own evidence-conditioned log-odds updates
+substantially better than simple baselines. Rank correlation remains high across
+the full run, and magnitude-sensitive degradation is concentrated in rare
+extreme shifts. These findings suggest a concrete and measurable form of
+metacognitive forecast revision: models can often say, before seeing evidence
+in an ordinary context, how that evidence will later move their own forecast.
+
+\begin{thebibliography}{9}
+
+\bibitem{halawi2024forecasting}
+Danny Halawi, Fred Zhang, Chen Yueh-Han, and Jacob Steinhardt.
+\newblock Approaching human-level forecasting with language models.
+\newblock \emph{arXiv preprint arXiv:2402.18563}, 2024.
+\newblock \url{https://arxiv.org/abs/2402.18563}.
+
+\bibitem{karger2024forecastbench}
+Ezra Karger, Houtan Bastani, Chen Yueh-Han, Zachary Jacobs, Danny Halawi,
+Fred Zhang, and Philip E. Tetlock.
+\newblock ForecastBench: A dynamic benchmark of AI forecasting capabilities.
+\newblock \emph{arXiv preprint arXiv:2409.19839}, 2024.
+\newblock \url{https://arxiv.org/abs/2409.19839}.
+
+\bibitem{kadavath2022know}
+Saurav Kadavath, Tom Conerly, Amanda Askell, Tom Henighan, and others.
+\newblock Language models (mostly) know what they know.
+\newblock \emph{arXiv preprint arXiv:2207.05221}, 2022.
+\newblock \url{https://arxiv.org/abs/2207.05221}.
+
+\bibitem{ashok2025behavior}
+Dhananjay Ashok and Jonathan May.
+\newblock Language models can predict their own behavior.
+\newblock \emph{arXiv preprint arXiv:2502.13329}, 2025.
+\newblock \url{https://arxiv.org/abs/2502.13329}.
+
+\bibitem{binder2024inward}
+Felix J. Binder, James Chua, Tomek Korbak, Henry Sleight, John Hughes,
+Robert Long, Ethan Perez, Miles Turpin, and Owain Evans.
+\newblock Looking inward: Language models can learn about themselves by
+introspection.
+\newblock \emph{arXiv preprint arXiv:2410.13787}, 2024.
+\newblock \url{https://arxiv.org/abs/2410.13787}.
+
+\bibitem{zhu2024priors}
+Jian-Qiao Zhu and Thomas L. Griffiths.
+\newblock Eliciting the priors of large language models using iterated
+in-context learning.
+\newblock \emph{arXiv preprint arXiv:2406.01860}, 2024.
+\newblock \url{https://arxiv.org/abs/2406.01860}.
+
+\bibitem{qiu2026bayesian}
+Linlu Qiu, Fei Sha, Kelsey Allen, Yoon Kim, Tal Linzen, and Sjoerd van
+Steenkiste.
+\newblock Bayesian teaching enables probabilistic reasoning in large language
+models.
+\newblock \emph{Nature Communications}, 17:1238, 2026.
+\newblock \url{https://www.nature.com/articles/s41467-025-67998-6}.
+
+\end{thebibliography}
+
+\end{document}
