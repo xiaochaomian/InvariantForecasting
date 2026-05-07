@@ -1,4 +1,4 @@
-This is pdfTeX, Version 3.141592653-2.6-1.40.27 (TeX Live 2025) (preloaded format=pdflatex 2025.3.8)  5 MAY 2026 19:15
+This is pdfTeX, Version 3.141592653-2.6-1.40.27 (TeX Live 2025) (preloaded format=pdflatex 2025.3.8)  6 MAY 2026 20:42
 entering extended mode
  restricted \write18 enabled.
  %&-line parsing enabled.
@@ -495,33 +495,35 @@ Package microtype Info: Loading generic protrusion settings for font family
 
 
 [2]
-<figures/predicted_vs_actual_updates.pdf, id=79, 411.64383pt x 349.46233pt>
+<figures/predicted_vs_actual_updates.pdf, id=80, 408.45221pt x 349.46233pt>
 File: figures/predicted_vs_actual_updates.pdf Graphic file (type pdf)
 <use figures/predicted_vs_actual_updates.pdf>
 Package pdftex.def Info: figures/predicted_vs_actual_updates.pdf  used on input
- line 165.
-(pdftex.def)             Requested size: 338.22418pt x 287.14217pt.
-<figures/extremity_bins.pdf, id=81, 599.76888pt x 283.60342pt>
+ line 167.
+(pdftex.def)             Requested size: 338.22418pt x 289.38176pt.
+<figures/extremity_bins.pdf, id=82, 599.76888pt x 283.60342pt>
 File: figures/extremity_bins.pdf Graphic file (type pdf)
 <use figures/extremity_bins.pdf>
-Package pdftex.def Info: figures/extremity_bins.pdf  used on input line 203.
+Package pdftex.def Info: figures/extremity_bins.pdf  used on input line 205.
 (pdftex.def)             Requested size: 413.3867pt x 195.47452pt.
-<figures/robustness_summary.pdf, id=82, 513.04485pt x 288.91869pt>
+<figures/robustness_summary.pdf, id=83, 513.04485pt x 288.91869pt>
 File: figures/robustness_summary.pdf Graphic file (type pdf)
 <use figures/robustness_summary.pdf>
-Package pdftex.def Info: figures/robustness_summary.pdf  used on input line 212
+Package pdftex.def Info: figures/robustness_summary.pdf  used on input line 214
 .
 (pdftex.def)             Requested size: 366.40834pt x 206.34163pt.
 
 
 [3]
 
-[4{/usr/local/texlive/2025/texmf-dist/fonts/enc/dvips/cm-super/cm-super-ts1.enc
-} <./figures/predicted_vs_actual_updates.pdf>]
+[4 <./figures/predicted_vs_actual_updates.pdf>]
 
-[5 <./figures/extremity_bins.pdf>]
+[5{/usr/local/texlive/2025/texmf-dist/fonts/enc/dvips/cm-super/cm-super-ts1.enc
+} <./figures/extremity_bins.pdf>]
 
-[6 <./figures/robustness_summary.pdf>] (./mainpaperdraft.aux)
+[6 <./figures/robustness_summary.pdf>]
+
+[7] (./mainpaperdraft.aux)
  ***********
 LaTeX2e <2024-11-01> patch level 2
 L3 programming layer <2025-01-18>
@@ -530,13 +532,13 @@ Package rerunfilecheck Info: File `mainpaperdraft.out' has not changed.
 (rerunfilecheck)             Checksum: A4D61987DBF0C1CA9E3E29EC2E5DD4AE;1131.
  ) 
 Here is how much of TeX's memory you used:
- 12880 strings out of 473190
- 198969 string characters out of 5715801
- 655954 words of memory out of 5000000
+ 12871 strings out of 473190
+ 198903 string characters out of 5715801
+ 655873 words of memory out of 5000000
  35809 multiletter control sequences out of 15000+600000
- 573047 words of font info for 146 fonts, out of 8000000 for 9000
+ 572792 words of font info for 141 fonts, out of 8000000 for 9000
  1141 hyphenation exceptions out of 8191
- 75i,11n,79p,1011b,586s stack positions out of 10000i,1000n,20000p,200000b,200000s
+ 75i,11n,79p,1011b,588s stack positions out of 10000i,1000n,20000p,200000b,200000s
 </usr/local/texlive/2025/texmf-dist/fonts/type1/public/amsfonts/cm/cmbx10.pfb
 ></usr/local/texlive/2025/texmf-dist/fonts/type1/public/amsfonts/cm/cmbx12.pfb>
 </usr/local/texlive/2025/texmf-dist/fonts/type1/public/amsfonts/cm/cmmi10.pfb><
@@ -553,10 +555,10 @@ e/2025/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy10.pfb></usr/local/texlive
 5/texmf-dist/fonts/type1/public/amsfonts/cm/cmti10.pfb></usr/local/texlive/2025
 /texmf-dist/fonts/type1/public/amsfonts/cm/cmtt10.pfb></usr/local/texlive/2025/
 texmf-dist/fonts/type1/public/cm-super/sfrm0800.pfb>
-Output written on mainpaperdraft.pdf (6 pages, 268033 bytes).
+Output written on mainpaperdraft.pdf (7 pages, 268768 bytes).
 PDF statistics:
- 361 PDF objects out of 1000 (max. 8388607)
- 185 compressed objects within 2 object streams
- 39 named destinations out of 1000 (max. 500000)
+ 365 PDF objects out of 1000 (max. 8388607)
+ 190 compressed objects within 2 object streams
+ 40 named destinations out of 1000 (max. 500000)
  29272 words of extra memory for PDF output out of 29859 (max. 10000000)
 

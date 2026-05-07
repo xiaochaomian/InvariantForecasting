@@ -38,14 +38,15 @@ neutral evidence packet $Y$, we first elicit the model's current probability
 $\pi=P(X)$. In the same context, before allowing an ordinary update, we ask the
 model to predict what its own posterior would be after receiving $Y$. In a
 fresh context, we then actually provide $Y$ and elicit the realized posterior.
-We compare predicted and realized updates in log-odds space. On a 200-question
-ForecastBench-derived validation set using GPT-OSS-120B, the model's predicted
-and realized log-odds updates have Spearman correlation $0.835$ and reduce
-mean absolute log-odds error by $58.0\%$ relative to a no-update baseline.
-After removing exact $0/1$ parsed posteriors, Pearson correlation rises from
-$0.664$ to $0.899$ and Spearman correlation remains high at $0.855$. Error
-analysis shows that failures concentrate in a small number of extreme posterior
-shifts, while ordinary-sized updates remain strongly predictable. These results
+We compare predicted and realized updates in log-odds space. On the full 343-question
+ForecastBench-derived validation split using GPT-OSS-120B, the model's predicted
+and realized log-odds updates have Spearman correlation $0.908$ and Pearson
+correlation $0.894$, reducing mean absolute log-odds error by $65.4\%$
+relative to a no-update baseline. The result is stable under robustness checks:
+restricting to $|\Delta_{\act}|<5$ gives Spearman $0.907$ and Pearson $0.886$.
+Error analysis shows that failures are concentrated in a small number of
+near-boundary probability cases, while ordinary-sized updates are strongly
+predictable. These results
 suggest that language models exhibit measurable self-forecasting of their own
 evidence-conditioned forecast revisions, without implying Bayes optimality or
 privileged access to internal beliefs.
@@ -78,11 +79,12 @@ If models have metacognitive access to their own forecast revision behavior,
 then $\Delta_{\pred}$ should track $\Delta_{\act}$ across many $(X,Y)$ pairs.
 
 This paper reports an initial, deliberately narrow result: neutral evidence
-packets only, one model, and 200 validation questions. The result is nonetheless
+packets only, one model, and the full 343-question validation split. The result is nonetheless
 sharp. Predicted and actual updates are strongly rank-correlated, substantially
 closer than a no-update baseline, and robust after excluding exact boundary
-probabilities. The main failure mode is also interpretable: a small number of
-extreme actual shifts dominate RMSE and depress all-row Pearson correlation.
+probabilities. The remaining failures are also interpretable: they are mostly near-boundary
+probability cases or directional disagreements on individual questions, rather
+than a broad collapse of self-prediction.
 
 \section{Protocol}
 
@@ -119,13 +121,13 @@ probability gap, and improvement over a no-update baseline
 
 \section{Data and Model}
 
-We evaluate on 200 validation questions from the repository's
+We evaluate on all 343 validation questions from the repository's
 ForecastBench-derived dataset. The evidence packets are the neutral variants of
 the generated prior/update dataset; stronger weak-yes, strong-yes, weak-no, and
 strong-no framings are reserved for future experiments. We run GPT-OSS-120B via
 Tinker sampling at temperature $0$, top-$p=1$, and a 512-token generation cap.
-The run produced 199 parseable prior forecasts and 189 fully parseable
-prior/predicted/actual triples, giving pair coverage $94.5\%$.
+The run produced 342 parseable prior forecasts and 330 fully parseable
+prior/predicted/actual triples, giving pair coverage $96.2\%$.
 
 \section{Results}
 
@@ -136,47 +138,47 @@ prior/predicted/actual triples, giving pair coverage $94.5\%$.
 \toprule
 Metric & All rows & Excl. exact 0/1 & $|\Delta_{\act}|<5$ \\
 \midrule
-Parseable pairs / rows & 189 / 200 & 188 / 200 & 186 / 200 \\
-Pearson corr. & 0.664 & 0.899 & 0.876 \\
-Spearman corr. & 0.835 & 0.855 & 0.850 \\
-Log-odds MAE & 0.440 & 0.372 & 0.367 \\
-Log-odds RMSE & 1.080 & 0.503 & 0.491 \\
-Posterior RMSE & 0.044 & 0.037 & 0.037 \\
-No-update MAE & 1.048 & 0.987 & 0.942 \\
-MAE improvement vs no-update & 58.0\% & 62.3\% & 61.0\% \\
+Parseable pairs / rows & 330 / 343 & 330 / 343 & 329 / 343 \\
+Pearson corr. & 0.894 & 0.894 & 0.886 \\
+Spearman corr. & 0.908 & 0.908 & 0.907 \\
+Log-odds MAE & 0.289 & 0.289 & 0.290 \\
+Log-odds RMSE & 0.438 & 0.438 & 0.438 \\
+Posterior RMSE & 0.041 & 0.041 & 0.041 \\
+No-update MAE & 0.836 & 0.836 & 0.824 \\
+MAE improvement vs no-update & 65.4\% & 65.4\% & 64.8\% \\
 \bottomrule
 \end{tabular}
 \caption{Main exact-protocol results. The model substantially predicts its own
-future update. Exact boundary probabilities primarily affect Pearson and RMSE
-through logit clipping, while rank correlation remains high.}
+future update. Boundary filtering and a $|\Delta_{\act}|<5$ restriction leave
+the main conclusion essentially unchanged.}
 \label{tab:main}
 \end{table}
 
 Table~\ref{tab:main} gives the main result. Across all parseable pairs,
-predicted and actual log-odds shifts have Spearman correlation $0.835$ and
-Pearson correlation $0.664$. The model reduces log-odds MAE by $58.0\%$
-relative to predicting no update. Removing exact $0/1$ posteriors leaves nearly
-the same number of examples but changes the magnitude-sensitive metrics
-substantially: Pearson rises to $0.899$ and RMSE falls to $0.503$. This confirms
-that a small number of boundary outputs dominate all-row squared error.
+predicted and actual log-odds shifts have Spearman correlation $0.908$ and
+Pearson correlation $0.894$. The model reduces log-odds MAE by $65.4\%$
+relative to predicting no update. Unlike the earlier 200-group smoke test, the
+full validation run contains no exact $0/1$ posteriors among parseable pairs, so
+the all-row and boundary-filtered metrics coincide. Restricting to
+$|\Delta_{\act}|<5$ yields nearly identical results.
 
 \begin{figure}[t]
 \centering
 \includegraphics[width=0.72\linewidth]{figures/predicted_vs_actual_updates.pdf}
 \caption{Predicted versus actual log-odds updates in the exact two-context
-protocol. The dashed line is perfect self-prediction. The exact $0/1$ outlier
-is visible as a large negative actual shift.}
+protocol. The dashed line is perfect self-prediction.}
 \label{fig:scatter}
 \end{figure}
 
 Figure~\ref{fig:scatter} shows the same pattern visually. Most points cluster
-around the diagonal, while one exact-zero actual posterior produces an extreme
-negative update and drives a large portion of the all-row RMSE.
+around the diagonal, with no exact $0/1$ posterior among parseable pairs in the
+full validation run.
 
 \section{Distribution-Conditional Diagnostics}
 
-The 200-run suggests a distribution-conditional story: the model predicts
-ordinary updates well, while rare extreme updates are less stable. We therefore
+The full validation run supports a distribution-conditional story: the model
+predicts ordinary updates especially well, while rare extreme updates are too
+few to estimate reliably. We therefore
 condition on $|\Delta_{\act}|$ bins.
 
 \begin{table}[t]
@@ -186,15 +188,15 @@ condition on $|\Delta_{\act}|$ bins.
 \toprule
 $|\Delta_{\act}|$ bin & $n$ & Pearson & Spearman & MAE & RMSE & Post. MAE \\
 \midrule
-$<1$ & 116 & 0.805 & 0.780 & 0.308 & 0.428 & 0.025 \\
-$[1,3)$ & 69 & 0.893 & 0.557 & 0.463 & 0.578 & 0.015 \\
-$[3,5)$ & 1 & -- & -- & 0.693 & 0.693 & 0.00005 \\
-$\geq5$ & 3 & 0.443 & 0.500 & 4.934 & 7.653 & 0.127 \\
+$<1$ & 229 & 0.874 & 0.885 & 0.205 & 0.311 & 0.025 \\
+$[1,3)$ & 99 & 0.848 & 0.701 & 0.476 & 0.629 & 0.017 \\
+$[3,5)$ & 1 & -- & -- & 1.386 & 1.386 & 0.00015 \\
+$\geq5$ & 1 & -- & -- & 0.000 & 0.000 & 0.000 \\
 \bottomrule
 \end{tabular}
 \caption{Performance conditioned on actual update extremity. Most examples
-fall below $|\Delta_{\act}|<3$, where linear correlation and error remain
-strong. The extreme bin is tiny and contains the exact-zero outlier.}
+fall below $|\Delta_{\act}|<3$, where linear/rank correlations and errors
+remain strong. The extreme bins are too small for stable correlation estimates.}
 \label{tab:bins}
 \end{table}
 
@@ -203,26 +205,25 @@ strong. The extreme bin is tiny and contains the exact-zero outlier.}
 \includegraphics[width=0.88\linewidth]{figures/extremity_bins.pdf}
 \caption{Correlations and error by actual-update extremity. The two-regime
 picture is visible: ordinary updates are predictable; rare extreme shifts are
-the main source of instability.}
+sparse in this validation split.}
 \label{fig:bins}
 \end{figure}
 
 \begin{figure}[t]
 \centering
 \includegraphics[width=0.78\linewidth]{figures/robustness_summary.pdf}
-\caption{Robustness of the headline metrics. Excluding exact boundary
-posteriors or restricting to $|\Delta_{\act}|<5$ recovers high Pearson
-correlation while preserving high Spearman correlation and large improvement
-over no-update.}
+\caption{Robustness of the headline metrics. Boundary filtering leaves the full-validation result unchanged, while
+restricting to $|\Delta_{\act}|<5$ preserves high Pearson/Spearman correlation
+and large improvement over no-update.}
 \label{fig:robust}
 \end{figure}
 
 Table~\ref{tab:bins} and Figure~\ref{fig:bins} are the key diagnostic evidence.
-There are 185 parseable pairs with $|\Delta_{\act}|<3$. In these ordinary
-regimes, Pearson correlations are $0.805$ and $0.893$ in the first two bins,
-with log-odds MAE below $0.47$. The $\geq5$ bin contains only three examples and
-one exact-zero posterior; it is too small to support broad conclusions, but it
-explains why all-row Pearson and RMSE are more fragile than Spearman.
+There are 328 parseable pairs with $|\Delta_{\act}|<3$. In these ordinary
+regimes, Pearson correlations are $0.874$ and $0.848$ in the first two bins,
+with log-odds MAE below $0.48$. The $[3,5)$ and $\geq5$ bins contain one example
+each, so they are useful as case studies but not as stable estimates of
+correlation.
 
 \section{Worst-Case Examples}
 
@@ -233,26 +234,26 @@ explains why all-row Pearson and RMSE are more fragile than Spearman.
 \toprule
 Question & $\pi$ & $\pi'_{\pred}$ & $\pi'_{\act}$ & $\Delta_{\pred}$ & $\Delta_{\act}$ \\
 \midrule
-Scottie Scheffler wins 2026 Masters & 0.220 & 0.340 & 0.000 & 0.602 & -12.550 \\
-Belichick coaches Chargers in 2024--25 & 0.001 & 0.0001 & 0.001 & -2.303 & 0.000 \\
-Solana reaches \$100 in March & 0.300 & 0.950 & 0.990 & 3.792 & 5.442 \\
-Kim Jong Un out as Supreme Leader in 2025 & 0.020 & 0.010 & 0.002 & -0.703 & -2.321 \\
-New Coronavirus pandemic in 2025 & 0.020 & 0.030 & 0.008 & 0.416 & -0.928 \\
+Solana reaches \$100 in March & 0.300 & 0.950 & 0.680 & 3.792 & 1.601 \\
+New Coronavirus pandemic in 2025 & 0.035 & 0.032 & 0.008 & -0.093 & -1.504 \\
+Socialist Party wins most seats in 2025 Netherlands election & 0.040 & 0.002 & 0.008 & -3.035 & -1.642 \\
+Oviedo wins the 2025--26 La Liga & 0.003 & 0.0002 & 0.00005 & -2.711 & -4.097 \\
+Marburg hemorrhagic fever vaccine by 2025-04-20 & 0.120 & 0.140 & 0.040 & 0.177 & -1.186 \\
 \bottomrule
 \end{tabular}
 \caption{Top worst-case examples by absolute log-odds shift error. Boundary and
-near-boundary probabilities create large log-odds effects even when probability
-differences are modest.}
+near-boundary probabilities can create large log-odds effects even when
+probability differences are modest.}
 \label{tab:worst}
 \end{table}
 
-The worst cases are informative rather than merely embarrassing. The largest
-error is an exact $0.0$ actual posterior, which becomes a very large negative
-log-odds shift after clipping. Other large errors often involve very small
-prior or posterior probabilities. This suggests that future runs should report
+The worst cases are informative rather than merely embarrassing. Several large
+errors involve small prior or posterior probabilities, where modest probability
+changes can still produce large log-odds shifts. Others are genuine directional
+or magnitude disagreements, such as predicting a strong positive update when the
+fresh-context posterior moves down. This suggests that future runs should report
 both log-odds-space metrics and probability-space metrics, and should audit
-whether exact boundary outputs reflect genuine model certainty, parsing
-artifacts, or prompt-induced formatting behavior.
+near-boundary behavior carefully.
 
 \section{Related Work}
 
@@ -299,11 +300,11 @@ tracks realized update.
 \section{Conclusion}
 
 We introduced a two-context protocol for testing whether language models can
-forecast their own future belief updates. On 200 neutral ForecastBench-derived
+forecast their own future belief updates. On 343 neutral ForecastBench-derived
 examples, GPT-OSS-120B predicts its own evidence-conditioned log-odds updates
-substantially better than simple baselines. Rank correlation remains high across
-the full run, and magnitude-sensitive degradation is concentrated in rare
-extreme shifts. These findings suggest a concrete and measurable form of
+substantially better than simple baselines. Both rank and linear correlations remain high across
+the full run, and magnitude errors are concentrated in a small number of
+case-level disagreements. These findings suggest a concrete and measurable form of
 metacognitive forecast revision: models can often say, before seeing evidence
 in an ordinary context, how that evidence will later move their own forecast.
 

@@ -18,10 +18,10 @@
 \@writefile{toc}{\contentsline {section}{\numberline {4}Results}{2}{section.4}\protected@file@percent }
 \citation{halawi2024forecasting}
 \citation{karger2024forecastbench}
-\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces Main exact-protocol results. The model substantially predicts its own future update. Exact boundary probabilities primarily affect Pearson and RMSE through logit clipping, while rank correlation remains high.}}{3}{table.1}\protected@file@percent }
-\newlabel{tab:main}{{1}{3}{Main exact-protocol results. The model substantially predicts its own future update. Exact boundary probabilities primarily affect Pearson and RMSE through logit clipping, while rank correlation remains high}{table.1}{}}
-\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces Performance conditioned on actual update extremity. Most examples fall below $|\Delta _{\mathrm  {act}}|<3$, where linear correlation and error remain strong. The extreme bin is tiny and contains the exact-zero outlier.}}{3}{table.2}\protected@file@percent }
-\newlabel{tab:bins}{{2}{3}{Performance conditioned on actual update extremity. Most examples fall below $|\Delta _{\act }|<3$, where linear correlation and error remain strong. The extreme bin is tiny and contains the exact-zero outlier}{table.2}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces Main exact-protocol results. The model substantially predicts its own future update. Boundary filtering and a $|\Delta _{\mathrm  {act}}|<5$ restriction leave the main conclusion essentially unchanged.}}{3}{table.1}\protected@file@percent }
+\newlabel{tab:main}{{1}{3}{Main exact-protocol results. The model substantially predicts its own future update. Boundary filtering and a $|\Delta _{\act }|<5$ restriction leave the main conclusion essentially unchanged}{table.1}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces Performance conditioned on actual update extremity. Most examples fall below $|\Delta _{\mathrm  {act}}|<3$, where linear/rank correlations and errors remain strong. The extreme bins are too small for stable correlation estimates.}}{3}{table.2}\protected@file@percent }
+\newlabel{tab:bins}{{2}{3}{Performance conditioned on actual update extremity. Most examples fall below $|\Delta _{\act }|<3$, where linear/rank correlations and errors remain strong. The extreme bins are too small for stable correlation estimates}{table.2}{}}
 \@writefile{toc}{\contentsline {section}{\numberline {5}Distribution-Conditional Diagnostics}{3}{section.5}\protected@file@percent }
 \@writefile{toc}{\contentsline {section}{\numberline {6}Worst-Case Examples}{3}{section.6}\protected@file@percent }
 \citation{kadavath2022know}
@@ -29,25 +29,25 @@
 \citation{binder2024inward}
 \citation{zhu2024priors}
 \citation{qiu2026bayesian}
-\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces Predicted versus actual log-odds updates in the exact two-context protocol. The dashed line is perfect self-prediction. The exact $0/1$ outlier is visible as a large negative actual shift.}}{4}{figure.1}\protected@file@percent }
-\newlabel{fig:scatter}{{1}{4}{Predicted versus actual log-odds updates in the exact two-context protocol. The dashed line is perfect self-prediction. The exact $0/1$ outlier is visible as a large negative actual shift}{figure.1}{}}
-\@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces Top worst-case examples by absolute log-odds shift error. Boundary and near-boundary probabilities create large log-odds effects even when probability differences are modest.}}{4}{table.3}\protected@file@percent }
-\newlabel{tab:worst}{{3}{4}{Top worst-case examples by absolute log-odds shift error. Boundary and near-boundary probabilities create large log-odds effects even when probability differences are modest}{table.3}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces Predicted versus actual log-odds updates in the exact two-context protocol. The dashed line is perfect self-prediction.}}{4}{figure.1}\protected@file@percent }
+\newlabel{fig:scatter}{{1}{4}{Predicted versus actual log-odds updates in the exact two-context protocol. The dashed line is perfect self-prediction}{figure.1}{}}
 \@writefile{toc}{\contentsline {section}{\numberline {7}Related Work}{4}{section.7}\protected@file@percent }
 \@writefile{toc}{\contentsline {paragraph}{LLM forecasting.}{4}{section*.5}\protected@file@percent }
 \@writefile{toc}{\contentsline {paragraph}{Self-knowledge and self-prediction.}{4}{section*.6}\protected@file@percent }
-\bibcite{halawi2024forecasting}{1}
-\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces Correlations and error by actual-update extremity. The two-regime picture is visible: ordinary updates are predictable; rare extreme shifts are the main source of instability.}}{5}{figure.2}\protected@file@percent }
-\newlabel{fig:bins}{{2}{5}{Correlations and error by actual-update extremity. The two-regime picture is visible: ordinary updates are predictable; rare extreme shifts are the main source of instability}{figure.2}{}}
-\@writefile{toc}{\contentsline {paragraph}{Bayesian and probabilistic reasoning in LLMs.}{5}{section*.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Bayesian and probabilistic reasoning in LLMs.}{4}{section*.7}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces Correlations and error by actual-update extremity. The two-regime picture is visible: ordinary updates are predictable; rare extreme shifts are sparse in this validation split.}}{5}{figure.2}\protected@file@percent }
+\newlabel{fig:bins}{{2}{5}{Correlations and error by actual-update extremity. The two-regime picture is visible: ordinary updates are predictable; rare extreme shifts are sparse in this validation split}{figure.2}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces Top worst-case examples by absolute log-odds shift error. Boundary and near-boundary probabilities can create large log-odds effects even when probability differences are modest.}}{5}{table.3}\protected@file@percent }
+\newlabel{tab:worst}{{3}{5}{Top worst-case examples by absolute log-odds shift error. Boundary and near-boundary probabilities can create large log-odds effects even when probability differences are modest}{table.3}{}}
 \@writefile{toc}{\contentsline {section}{\numberline {8}Limitations and Next Steps}{5}{section.8}\protected@file@percent }
 \@writefile{toc}{\contentsline {section}{\numberline {9}Conclusion}{5}{section.9}\protected@file@percent }
+\bibcite{halawi2024forecasting}{1}
 \bibcite{karger2024forecastbench}{2}
 \bibcite{kadavath2022know}{3}
 \bibcite{ashok2025behavior}{4}
 \bibcite{binder2024inward}{5}
 \bibcite{zhu2024priors}{6}
 \bibcite{qiu2026bayesian}{7}
-\@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces Robustness of the headline metrics. Excluding exact boundary posteriors or restricting to $|\Delta _{\mathrm  {act}}|<5$ recovers high Pearson correlation while preserving high Spearman correlation and large improvement over no-update.}}{6}{figure.3}\protected@file@percent }
-\newlabel{fig:robust}{{3}{6}{Robustness of the headline metrics. Excluding exact boundary posteriors or restricting to $|\Delta _{\act }|<5$ recovers high Pearson correlation while preserving high Spearman correlation and large improvement over no-update}{figure.3}{}}
-\gdef \@abspage@last{6}
+\@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces Robustness of the headline metrics. Boundary filtering leaves the full-validation result unchanged, while restricting to $|\Delta _{\mathrm  {act}}|<5$ preserves high Pearson/Spearman correlation and large improvement over no-update.}}{6}{figure.3}\protected@file@percent }
+\newlabel{fig:robust}{{3}{6}{Robustness of the headline metrics. Boundary filtering leaves the full-validation result unchanged, while restricting to $|\Delta _{\act }|<5$ preserves high Pearson/Spearman correlation and large improvement over no-update}{figure.3}{}}
+\gdef \@abspage@last{7}

@@ -261,6 +261,32 @@ def make_predictor(config: Config) -> OpenAIChatPredictor | TinkerSamplingPredic
     raise ValueError(f"unknown mode {config.mode!r}")
 
 
+def read_checkpoint_rows(path: Path) -> list[dict[str, Any]]:
+    rows_by_id: dict[str, dict[str, Any]] = {}
+    if not path.exists():
+        return []
+    with path.open(encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            qid = str(row.get("id") or "")
+            if qid:
+                rows_by_id[qid] = row
+    return [rows_by_id[qid] for qid in sorted(rows_by_id)]
+
+
+def append_checkpoint_row(path: Path, row: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(row, sort_keys=True, ensure_ascii=False) + "\n")
+        handle.flush()
+
+
 def evaluate(config: Config) -> tuple[dict[str, Any], Path, Path]:
     started = time.time()
     questions_by_id = index_questions(config.unified)
@@ -273,11 +299,22 @@ def evaluate(config: Config) -> tuple[dict[str, Any], Path, Path]:
     run_dir = config.results_dir / config.run_name / config.split
     run_dir.mkdir(parents=True, exist_ok=True)
     rows_path = run_dir / "metacognitive_update_rows.csv"
+    checkpoint_path = run_dir / "metacognitive_update_rows.jsonl"
     summary_path = run_dir / "summary.json"
 
-    out_rows: list[dict[str, Any]] = []
+    out_rows = read_checkpoint_rows(checkpoint_path)
+    completed_ids = {str(row.get("id")) for row in out_rows}
+    if completed_ids:
+        print(
+            f"resuming from {checkpoint_path}: {len(completed_ids)} completed groups",
+            flush=True,
+        )
+
     for idx, row in enumerate(training_rows, start=1):
         qid = str(row["id"])
+        if qid in completed_ids:
+            print(f"metacognitive update {idx}/{len(training_rows)} cached", flush=True)
+            continue
         q = questions_by_id.get(qid)
         rewrite = rewrites_by_id.get(qid)
         base_rate = row.get("base_rate") or {}
@@ -304,23 +341,24 @@ def evaluate(config: Config) -> tuple[dict[str, Any], Path, Path]:
             prior_completion = predictor.complete(prior_messages(prior_prompt))
             parsed_prior = parse_probability(prior_completion)
             if parsed_prior is None:
-                out_rows.append(
-                    {
-                        "id": qid,
-                        "split": config.split,
-                        "outcome": int(row["outcome"]),
-                        "prior_source": config.prior_source,
-                        "stated_prior_prob": stated_prior_prob,
-                        "prior_prob": None,
-                        "prior_parseable": False,
-                        "hypothetical_parseable": False,
-                        "actual_parseable": False,
-                        "question": row.get("question", ""),
-                        "prior_completion": prior_completion,
-                        "hypothetical_completion": "",
-                        "actual_completion": "",
-                    }
-                )
+                row_out = {
+                    "id": qid,
+                    "split": config.split,
+                    "outcome": int(row["outcome"]),
+                    "prior_source": config.prior_source,
+                    "stated_prior_prob": stated_prior_prob,
+                    "prior_prob": None,
+                    "prior_parseable": False,
+                    "hypothetical_parseable": False,
+                    "actual_parseable": False,
+                    "question": row.get("question", ""),
+                    "prior_completion": prior_completion,
+                    "hypothetical_completion": "",
+                    "actual_completion": "",
+                }
+                out_rows.append(row_out)
+                completed_ids.add(qid)
+                append_checkpoint_row(checkpoint_path, row_out)
                 print(f"metacognitive update {idx}/{len(training_rows)}", flush=True)
                 continue
             prior_prob = float(parsed_prior)
@@ -368,8 +406,11 @@ def evaluate(config: Config) -> tuple[dict[str, Any], Path, Path]:
                 }
             )
         out_rows.append(row_out)
+        completed_ids.add(qid)
+        append_checkpoint_row(checkpoint_path, row_out)
         print(f"metacognitive update {idx}/{len(training_rows)}", flush=True)
 
+    out_rows.sort(key=lambda r: str(r.get("id")))
     write_csv(rows_path, out_rows)
     parseable = [
         r
@@ -386,6 +427,7 @@ def evaluate(config: Config) -> tuple[dict[str, Any], Path, Path]:
         "model": config.model,
         "prior_source": config.prior_source,
         "n_groups": len(out_rows),
+        "checkpoint_path": str(checkpoint_path),
         "n_prior_parseable": sum(1 for r in out_rows if r.get("prior_parseable")),
         "n_parseable_pairs": len(parseable),
         "pair_coverage": len(parseable) / len(out_rows) if out_rows else 0.0,
@@ -664,7 +706,12 @@ def parse_args(argv: list[str] | None = None) -> Config:
         action="store_true",
         help="Shortcut for --prior-source elicited.",
     )
-    parser.add_argument("--limit-groups", type=int, default=5)
+    parser.add_argument(
+        "--limit-groups",
+        type=int,
+        default=5,
+        help="Debug cap on question groups; use 0 for the full split.",
+    )
     parser.add_argument("--max-workers", type=int, default=1)
     parser.add_argument("--max-tokens", type=int, default=512)
     parser.add_argument("--temperature", type=float, default=0.0)
@@ -677,6 +724,7 @@ def parse_args(argv: list[str] | None = None) -> Config:
     parser.add_argument("--tinker-base-model", default=DEFAULT_TINKER_BASE_MODEL)
     args = parser.parse_args(argv)
     prior_source = "elicited" if args.elicited_prior else args.prior_source
+    limit_groups = None if args.limit_groups == 0 else args.limit_groups
     return Config(
         training=Path(args.training),
         unified=Path(args.unified),
@@ -687,7 +735,7 @@ def parse_args(argv: list[str] | None = None) -> Config:
         mode=args.mode,
         model=args.model,
         prior_source=prior_source,
-        limit_groups=args.limit_groups,
+        limit_groups=limit_groups,
         max_workers=max(1, args.max_workers),
         max_tokens=args.max_tokens,
         temperature=args.temperature,
